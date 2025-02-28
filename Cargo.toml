@@ -10,3 +10,4 @@ anyhow = "1.0.96"                                # error handling
 bytes = "1.10.0"                                  # helps manage buffers
 clap = "4.5.31"                                  # helsp manage command line arguments
 thiserror = "2.0.11"                             # error handling
+winnow = "0.7.3"
