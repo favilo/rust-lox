@@ -1,4 +1,4 @@
-use std::fmt;
+use std::fmt::{self, write};
 
 use winnow::{
     ascii::multispace0,
@@ -10,6 +10,8 @@ use winnow::{
 pub enum Token {
     LeftParen,
     RightParen,
+    LeftBrace,
+    RightBrace,
     Eof,
 }
 
@@ -18,6 +20,8 @@ impl fmt::Display for Token {
         match self {
             Token::LeftParen => write!(f, "LEFT_PAREN ( null"),
             Token::RightParen => write!(f, "RIGHT_PAREN ) null"),
+            Token::LeftBrace => write!(f, "LEFT_BRACE {{ null"),
+            Token::RightBrace => write!(f, "RIGHT_BRACE {{ null"),
             Token::Eof => write!(f, "EOF  null"),
         }
     }
@@ -31,6 +35,8 @@ pub fn tokenize(input: &mut &str) -> winnow::error::Result<Vec<Token>> {
                 alt((
                     "(".map(|_| Token::LeftParen),
                     ")".map(|_| Token::RightParen),
+                    "{".map(|_| Token::LeftBrace),
+                    "}".map(|_| Token::RightBrace),
                 )),
                 multispace0,
             ),
