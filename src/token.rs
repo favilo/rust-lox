@@ -29,6 +29,9 @@ pub enum Token {
     Equal,
     EqualEqual,
 
+    Bang,
+    BangEqual,
+
     Newline,
     Unexpected(usize, String),
 
@@ -57,6 +60,8 @@ impl Token {
                 ";".map(|_| Token::Semicolon),
                 "==".map(|_| Token::EqualEqual),
                 "=".map(|_| Token::Equal),
+                "!=".map(|_| Token::BangEqual),
+                "!".map(|_| Token::Bang),
                 line_ending.map(|_| Token::Newline),
             )),
             space0,
@@ -82,6 +87,8 @@ impl fmt::Display for Token {
 
             Token::Equal => write!(f, "EQUAL = null"),
             Token::EqualEqual => write!(f, "EQUAL_EQUAL == null"),
+            Token::Bang => write!(f, "BANG ! null"),
+            Token::BangEqual => write!(f, "BANG_EQUAL != null"),
 
             Token::Newline => Ok(()),
             Token::Eof => write!(f, "EOF  null"),
