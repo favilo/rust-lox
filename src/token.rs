@@ -32,6 +32,11 @@ pub enum Token {
     Bang,
     BangEqual,
 
+    Less,
+    LessEqual,
+    Greater,
+    GreaterEqual,
+
     Newline,
     Unexpected(usize, String),
 
@@ -62,6 +67,10 @@ impl Token {
                 "=".map(|_| Token::Equal),
                 "!=".map(|_| Token::BangEqual),
                 "!".map(|_| Token::Bang),
+                "<=".map(|_| Token::LessEqual),
+                "<".map(|_| Token::Less),
+                ">=".map(|_| Token::GreaterEqual),
+                ">".map(|_| Token::Greater),
                 line_ending.map(|_| Token::Newline),
             )),
             space0,
@@ -89,6 +98,10 @@ impl fmt::Display for Token {
             Token::EqualEqual => write!(f, "EQUAL_EQUAL == null"),
             Token::Bang => write!(f, "BANG ! null"),
             Token::BangEqual => write!(f, "BANG_EQUAL != null"),
+            Token::Less => write!(f, "LESS < null"),
+            Token::LessEqual => write!(f, "LESS_EQUAL <= null"),
+            Token::Greater => write!(f, "GREATER > null"),
+            Token::GreaterEqual => write!(f, "GREATER_EQUAL >= null"),
 
             Token::Newline => Ok(()),
             Token::Eof => write!(f, "EOF  null"),
