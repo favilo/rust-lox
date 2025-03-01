@@ -43,6 +43,23 @@ pub enum Token {
     Number(String, f64),
     Identifier(String),
 
+    And,
+    Class,
+    Else,
+    False,
+    For,
+    Fun,
+    If,
+    Nil,
+    Or,
+    Print,
+    Return,
+    Super,
+    This,
+    True,
+    Var,
+    While,
+
     Newline,
     Unexpected(usize, String),
     Unterminated(usize),
@@ -112,7 +129,7 @@ impl Token {
                 let c = c.clone().as_char();
                 c.is_alphabetic() || c == '_'
             }),
-            take_while(1.., |c: S::Token| {
+            take_while(0.., |c: S::Token| {
                 let c = c.as_char();
                 c.is_alphanumeric() || c == '_'
             }),
@@ -122,6 +139,33 @@ impl Token {
                 Self::Identifier(std::str::from_utf8(s.as_bstr()).unwrap().to_string())
             })
             .parse_next(input)
+    }
+
+    fn keyword<S>(input: &mut S) -> ModalResult<Self>
+    where
+        for<'a> S: Stream + StreamIsPartial + Compare<&'a str> + AsBStr,
+        S::Slice: Eq + Hash + AsBStr,
+        S::Token: AsChar + Clone,
+    {
+        alt((
+            "and".value(Token::And),
+            "class".value(Token::Class),
+            "else".value(Token::Else),
+            "false".value(Token::False),
+            "for".value(Token::For),
+            "fun".value(Token::Fun),
+            "if".value(Token::If),
+            "nil".value(Token::Nil),
+            "or".value(Token::Or),
+            "print".value(Token::Print),
+            "return".value(Token::Return),
+            "super".value(Token::Super),
+            "this".value(Token::This),
+            "true".value(Token::True),
+            "var".value(Token::Var),
+            "while".value(Token::While),
+        ))
+        .parse_next(input)
     }
 
     fn parser<S>(input: &mut S) -> ModalResult<Self>
@@ -141,6 +185,7 @@ impl Token {
             alt((
                 Self::comment,
                 Self::string,
+                Self::keyword,
                 // Single character tokens
                 alt((
                     "(".value(Token::LeftParen),
@@ -204,6 +249,23 @@ impl fmt::Display for Token {
             Token::StringLiteral(s) => write!(f, "STRING \"{s}\" {s}"),
             Token::Number(s, n) => write!(f, "NUMBER {s} {n:?}"),
             Token::Identifier(s) => write!(f, "IDENTIFIER {s} null"),
+
+            Token::And => write!(f, "AND and null"),
+            Token::Class => write!(f, "CLASS class null"),
+            Token::Else => write!(f, "ELSE else null"),
+            Token::False => write!(f, "FALSE false null"),
+            Token::For => write!(f, "FOR for null"),
+            Token::Fun => write!(f, "FUN fun null"),
+            Token::If => write!(f, "IF if null"),
+            Token::Nil => write!(f, "NIL nil null"),
+            Token::Or => write!(f, "OR or null"),
+            Token::Print => write!(f, "PRINT print null"),
+            Token::Return => write!(f, "RETURN return null"),
+            Token::Super => write!(f, "SUPER super null"),
+            Token::This => write!(f, "THIS this null"),
+            Token::True => write!(f, "TRUE true null"),
+            Token::Var => write!(f, "VAR var null"),
+            Token::While => write!(f, "WHILE while null"),
 
             Token::Newline => Ok(()),
             Token::Eof => write!(f, "EOF  null"),
