@@ -2,16 +2,18 @@ use std::fmt;
 
 use winnow::{
     ascii::{line_ending, space0},
-    combinator::{alt, delimited},
+    combinator::{alt, delimited, eof, opt, repeat_till},
     error::{ErrMode, Result},
+    seq,
     stream::{AsChar, Compare, Stream, StreamIsPartial},
+    token::any,
     LocatingSlice, ModalResult, Parser,
 };
 
 use crate::error::Error;
 
 /// Token represents a single token in the input.
-#[derive(Debug)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Token {
     LeftParen,
     RightParen,
@@ -44,6 +46,20 @@ pub enum Token {
 }
 
 impl Token {
+    fn comment<S>(input: &mut S) -> ModalResult<Self>
+    where
+        for<'a> S: Stream + StreamIsPartial + Compare<&'a str>,
+        S::Token: AsChar + Clone,
+    {
+        seq!(
+            "//",
+            repeat_till::<_, _, (), _, _, _, _>(0.., any, alt((line_ending, eof))),
+            opt(line_ending)
+        )
+        .value(Self::Newline)
+        .parse_next(input)
+    }
+
     fn parser<S>(input: &mut S) -> ModalResult<Self>
     where
         for<'a> S: Stream + StreamIsPartial + Compare<&'a str>,
@@ -52,6 +68,7 @@ impl Token {
         delimited(
             space0,
             alt((
+                Self::comment,
                 "(".map(|_| Token::LeftParen),
                 ")".map(|_| Token::RightParen),
                 "{".map(|_| Token::LeftBrace),
