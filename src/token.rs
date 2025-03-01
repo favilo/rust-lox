@@ -26,6 +26,9 @@ pub enum Token {
     Slash,
     Semicolon,
 
+    Equal,
+    EqualEqual,
+
     Newline,
     Unexpected(usize, String),
 
@@ -52,6 +55,8 @@ impl Token {
                 "*".map(|_| Token::Star),
                 "/".map(|_| Token::Slash),
                 ";".map(|_| Token::Semicolon),
+                "==".map(|_| Token::EqualEqual),
+                "=".map(|_| Token::Equal),
                 line_ending.map(|_| Token::Newline),
             )),
             space0,
@@ -74,6 +79,9 @@ impl fmt::Display for Token {
             Token::Star => write!(f, "STAR * null"),
             Token::Slash => write!(f, "SLASH / null"),
             Token::Semicolon => write!(f, "SEMICOLON ; null"),
+
+            Token::Equal => write!(f, "EQUAL = null"),
+            Token::EqualEqual => write!(f, "EQUAL_EQUAL == null"),
 
             Token::Newline => Ok(()),
             Token::Eof => write!(f, "EOF  null"),
