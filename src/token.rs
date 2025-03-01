@@ -1,11 +1,11 @@
-use std::{fmt, hash::Hash};
+use std::{fmt, hash::Hash, str::FromStr};
 
 use winnow::{
-    ascii::{line_ending, space0},
-    combinator::{alt, cut_err, delimited, eof, opt, preceded, repeat_till, terminated},
+    ascii::{float, line_ending, space0, Caseless},
+    combinator::{alt, delimited, eof, opt, preceded, repeat_till},
     error::{ErrMode, Result, StrContext},
     seq,
-    stream::{AsBStr, AsChar, Compare, Stream, StreamIsPartial},
+    stream::{AsBStr, AsChar, Compare, ParseSlice, Stream, StreamIsPartial},
     token::{any, take_till},
     LocatingSlice, ModalResult, Parser,
 };
@@ -13,7 +13,7 @@ use winnow::{
 use crate::error::Error;
 
 /// Token represents a single token in the input.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum Token {
     LeftParen,
     RightParen,
@@ -40,6 +40,7 @@ pub enum Token {
     GreaterEqual,
 
     StringLiteral(String),
+    Number(String, f64),
 
     Newline,
     Unexpected(usize, String),
@@ -82,11 +83,34 @@ impl Token {
             .parse_next(input)
     }
 
+    fn number<S>(input: &mut S) -> ModalResult<Self>
+    where
+        for<'a> S: Stream + StreamIsPartial + Compare<Caseless<&'a str>> + AsBStr + Compare<char>,
+        S::Slice: Eq + Hash + AsBStr + ParseSlice<f64>,
+        S::Token: AsChar + Clone,
+        S::IterOffsets: Clone,
+    {
+        float
+            .take()
+            .map(|s: S::Slice| {
+                let s = std::str::from_utf8(s.as_bstr()).unwrap().to_string();
+                let number = f64::from_str(&s).unwrap();
+                Self::Number(s, number)
+            })
+            .parse_next(input)
+    }
+
     fn parser<S>(input: &mut S) -> ModalResult<Self>
     where
-        for<'a> S: Stream + StreamIsPartial + Compare<&'a str>,
-        S::Slice: Eq + Hash + AsBStr,
+        for<'a> S: Stream
+            + StreamIsPartial
+            + Compare<&'a str>
+            + Compare<Caseless<&'a str>>
+            + AsBStr
+            + Compare<char>,
+        S::Slice: Eq + Hash + AsBStr + ParseSlice<f64>,
         S::Token: AsChar + Clone,
+        S::IterOffsets: Clone,
     {
         delimited(
             space0,
@@ -119,6 +143,7 @@ impl Token {
                     "<".value(Token::Less),
                     ">".value(Token::Greater),
                 )),
+                Self::number,
                 line_ending.value(Token::Newline),
             )),
             space0,
@@ -152,6 +177,7 @@ impl fmt::Display for Token {
             Token::GreaterEqual => write!(f, "GREATER_EQUAL >= null"),
 
             Token::StringLiteral(s) => write!(f, "STRING \"{s}\" {s}"),
+            Token::Number(s, n) => write!(f, "NUMBER {s} {n:?}"),
 
             Token::Newline => Ok(()),
             Token::Eof => write!(f, "EOF  null"),
