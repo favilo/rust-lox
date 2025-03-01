@@ -6,7 +6,7 @@ use winnow::{
     error::{ErrMode, Result, StrContext},
     seq,
     stream::{AsBStr, AsChar, Compare, ParseSlice, Stream, StreamIsPartial},
-    token::{any, take_till},
+    token::{any, take_till, take_while},
     LocatingSlice, ModalResult, Parser,
 };
 
@@ -41,6 +41,7 @@ pub enum Token {
 
     StringLiteral(String),
     Number(String, f64),
+    Identifier(String),
 
     Newline,
     Unexpected(usize, String),
@@ -100,6 +101,29 @@ impl Token {
             .parse_next(input)
     }
 
+    fn identifier<S>(input: &mut S) -> ModalResult<Self>
+    where
+        for<'a> S: Stream + StreamIsPartial + Compare<&'a str> + AsBStr,
+        S::Slice: Eq + Hash + AsBStr,
+        S::Token: AsChar + Clone,
+    {
+        (
+            any.verify(|c: &S::Token| {
+                let c = c.clone().as_char();
+                c.is_alphabetic() || c == '_'
+            }),
+            take_while(1.., |c: S::Token| {
+                let c = c.as_char();
+                c.is_alphanumeric() || c == '_'
+            }),
+        )
+            .take()
+            .map(|s: S::Slice| {
+                Self::Identifier(std::str::from_utf8(s.as_bstr()).unwrap().to_string())
+            })
+            .parse_next(input)
+    }
+
     fn parser<S>(input: &mut S) -> ModalResult<Self>
     where
         for<'a> S: Stream
@@ -144,6 +168,7 @@ impl Token {
                     ">".value(Token::Greater),
                 )),
                 Self::number,
+                Self::identifier,
                 line_ending.value(Token::Newline),
             )),
             space0,
@@ -178,6 +203,7 @@ impl fmt::Display for Token {
 
             Token::StringLiteral(s) => write!(f, "STRING \"{s}\" {s}"),
             Token::Number(s, n) => write!(f, "NUMBER {s} {n:?}"),
+            Token::Identifier(s) => write!(f, "IDENTIFIER {s} null"),
 
             Token::Newline => Ok(()),
             Token::Eof => write!(f, "EOF  null"),
