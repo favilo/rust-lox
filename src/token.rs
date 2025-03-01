@@ -69,26 +69,28 @@ impl Token {
             space0,
             alt((
                 Self::comment,
-                "(".map(|_| Token::LeftParen),
-                ")".map(|_| Token::RightParen),
-                "{".map(|_| Token::LeftBrace),
-                "}".map(|_| Token::RightBrace),
-                ".".map(|_| Token::Dot),
-                ",".map(|_| Token::Comma),
-                "-".map(|_| Token::Minus),
-                "+".map(|_| Token::Plus),
-                "*".map(|_| Token::Star),
-                "/".map(|_| Token::Slash),
-                ";".map(|_| Token::Semicolon),
-                "==".map(|_| Token::EqualEqual),
-                "=".map(|_| Token::Equal),
-                "!=".map(|_| Token::BangEqual),
-                "!".map(|_| Token::Bang),
-                "<=".map(|_| Token::LessEqual),
-                "<".map(|_| Token::Less),
-                ">=".map(|_| Token::GreaterEqual),
-                ">".map(|_| Token::Greater),
-                line_ending.map(|_| Token::Newline),
+                "(".value(Token::LeftParen),
+                ")".value(Token::RightParen),
+                "{".value(Token::LeftBrace),
+                "}".value(Token::RightBrace),
+                ".".value(Token::Dot),
+                ",".value(Token::Comma),
+                "-".value(Token::Minus),
+                "+".value(Token::Plus),
+                "*".value(Token::Star),
+                "/".value(Token::Slash),
+                ";".value(Token::Semicolon),
+                // Must come before later substring tokens
+                "==".value(Token::EqualEqual),
+                "!=".value(Token::BangEqual),
+                "<=".value(Token::LessEqual),
+                ">=".value(Token::GreaterEqual),
+                // Must come after the multi-char tokens
+                "=".value(Token::Equal),
+                "!".value(Token::Bang),
+                "<".value(Token::Less),
+                ">".value(Token::Greater),
+                line_ending.value(Token::Newline),
             )),
             space0,
         )
@@ -152,8 +154,8 @@ pub fn tokenize(input: &str) -> Result<(), crate::error::Error> {
                 None
             }
             Err(ErrMode::Backtrack(_)) => {
-                errors = true;
                 let slice = input.next_token()?;
+                errors = true;
                 Some(Token::Unexpected(line, slice.to_string()))
             }
         }
