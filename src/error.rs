@@ -4,6 +4,9 @@ pub enum Error {
     // ReadFile(String),
     // #[error("Unknown command: {0}")]
     // UnknownCommand(String),
-    #[error("Error: {0}")]
+    #[error("Tokenize Error: {0}")]
     TokenizeError(String),
+
+    #[error("Parse Error: {0}")]
+    ParseError(String),
 }
