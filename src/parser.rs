@@ -1,6 +1,6 @@
 use std::hash::Hash;
 use winnow::{
-    ascii::{multispace0, Caseless},
+    ascii::{float, multispace0, Caseless},
     combinator::{alt, delimited},
     stream::{AsBStr, AsChar, Compare, ParseSlice, Stream, StreamIsPartial},
     ModalResult, Parser,
@@ -65,6 +65,7 @@ pub enum Literal {
     True,
     False,
     Nil,
+    Number(f64),
 }
 
 impl Literal {
@@ -86,6 +87,7 @@ impl Literal {
                 "true".value(Self::True),
                 "false".value(Self::False),
                 "nil".value(Self::Nil),
+                float.map(Self::Number),
             )),
             multispace0,
         )
@@ -99,6 +101,7 @@ impl std::fmt::Display for Literal {
             Self::True => write!(f, "true"),
             Self::False => write!(f, "false"),
             Self::Nil => write!(f, "nil"),
+            Self::Number(n) => write!(f, "{n:?}"),
         }
     }
 }
