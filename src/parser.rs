@@ -1,8 +1,10 @@
 use std::hash::Hash;
 use winnow::{
     ascii::{float, multispace0, Caseless},
-    combinator::{alt, delimited},
+    combinator::{alt, cut_err, delimited, opt, preceded, terminated},
+    error::StrContext,
     stream::{AsBStr, AsChar, Compare, ParseSlice, Stream, StreamIsPartial},
+    token::take_till,
     ModalResult, Parser,
 };
 
@@ -66,6 +68,7 @@ pub enum Literal {
     False,
     Nil,
     Number(f64),
+    String(String),
 }
 
 impl Literal {
@@ -88,9 +91,33 @@ impl Literal {
                 "false".value(Self::False),
                 "nil".value(Self::Nil),
                 float.map(Self::Number),
+                Self::string,
             )),
             multispace0,
         )
+        .parse_next(input)
+    }
+
+    fn string<S>(input: &mut S) -> ModalResult<Self>
+    where
+        for<'a> S: Stream
+            + StreamIsPartial
+            + Compare<&'a str>
+            + Compare<Caseless<&'a str>>
+            + AsBStr
+            + Compare<char>,
+        S::Slice: Eq + Hash + AsBStr + ParseSlice<f64> + Clone,
+        S::Token: AsChar + Clone,
+        S::IterOffsets: Clone,
+    {
+        preceded(
+            "\"",
+            cut_err(terminated(
+                take_till(0.., '"'),
+                "\"".context(StrContext::Expected("terminating `\"`".into())),
+            )),
+        )
+        .map(|s: S::Slice| Self::String(std::str::from_utf8(s.as_bstr()).unwrap().to_string()))
         .parse_next(input)
     }
 }
@@ -102,6 +129,7 @@ impl std::fmt::Display for Literal {
             Self::False => write!(f, "false"),
             Self::Nil => write!(f, "nil"),
             Self::Number(n) => write!(f, "{n:?}"),
+            Self::String(s) => write!(f, "{s}"),
         }
     }
 }
