@@ -47,10 +47,11 @@ fn main() {
                 String::new()
             });
             let res = parser::parse(&file_contents);
-            if res.is_err() {
+            let Ok(expr) = res else {
                 eprintln!("Failed to parse file {}", res.unwrap_err());
                 std::process::exit(65);
-            }
+            };
+            println!("{}", expr);
         }
     }
 }

@@ -1,11 +1,11 @@
 use std::hash::Hash;
 use winnow::{
-    ascii::{float, multispace0, Caseless},
-    combinator::{alt, cut_err, delimited, opt, preceded, terminated},
-    error::StrContext,
+    ascii::{digit1, multispace0, Caseless},
+    combinator::{alt, cut_err, delimited, opt, preceded, repeat, terminated, trace},
+    error::ParserError,
     stream::{AsBStr, AsChar, Compare, ParseSlice, Stream, StreamIsPartial},
-    token::take_till,
-    ModalResult, Parser,
+    token::{one_of, take_till},
+    LocatingSlice, ModalResult, Parser,
 };
 
 use crate::error;
@@ -13,8 +13,9 @@ use crate::error;
 #[derive(Debug, Clone, PartialEq)]
 pub enum Expr {
     Literal(Literal),
-    Parenthesis(Box<Expr>),
+    Group(Box<Expr>),
     Unary(Unary),
+    Binary(Binary),
 }
 
 impl std::fmt::Display for Expr {
@@ -22,13 +23,14 @@ impl std::fmt::Display for Expr {
         match self {
             Self::Literal(l) => write!(f, "{}", l),
             Self::Unary(u) => write!(f, "{}", u),
-            Self::Parenthesis(e) => write!(f, "(group {})", e),
+            Self::Binary(b) => write!(f, "{}", b),
+            Self::Group(e) => write!(f, "(group {})", e),
         }
     }
 }
 
 impl Expr {
-    pub fn parser<S>(input: &mut S) -> ModalResult<Self>
+    pub fn parser<S, E>(input: &mut S) -> ModalResult<Self, E>
     where
         for<'a> S: Stream
             + StreamIsPartial
@@ -39,21 +41,26 @@ impl Expr {
         S::Slice: Eq + Hash + AsBStr + ParseSlice<f64> + Clone,
         S::Token: AsChar + Clone,
         S::IterOffsets: Clone,
+        E: ParserError<S>,
     {
-        delimited(
-            multispace0,
-            alt((
-                // Binary::parser.map(Self::Binary),
-                Self::parenthesis,
-                Unary::parser.map(Self::Unary),
-                Literal::parser.map(Self::Literal),
-            )),
-            multispace0,
+        trace(
+            "expr",
+            delimited(
+                multispace0,
+                alt((
+                    // Binary::parser.map(Self::Binary),
+                    Self::parenthesis,
+                    Unary::parser,
+                    Binary::term,
+                    Literal::parser.map(Self::Literal),
+                )),
+                multispace0,
+            ),
         )
         .parse_next(input)
     }
 
-    fn parenthesis<S>(input: &mut S) -> ModalResult<Self>
+    fn parenthesis<S, E>(input: &mut S) -> ModalResult<Self, E>
     where
         for<'a> S: Stream
             + StreamIsPartial
@@ -64,12 +71,44 @@ impl Expr {
         S::Slice: Eq + Hash + AsBStr + ParseSlice<f64> + Clone,
         S::Token: AsChar + Clone,
         S::IterOffsets: Clone,
+        E: ParserError<S>,
     {
-        preceded(
-            "(",
-            cut_err(delimited(multispace0, Self::parser, (multispace0, ")"))),
+        trace(
+            "parenthesis",
+            preceded(
+                "(",
+                cut_err(delimited(multispace0, Self::parser, (multispace0, ")"))),
+            ),
         )
-        .map(|e| Self::Parenthesis(Box::new(e)))
+        .map(|e| Self::Group(Box::new(e)))
+        .parse_next(input)
+    }
+
+    pub fn factor<S, E>(input: &mut S) -> ModalResult<Self, E>
+    where
+        for<'a> S: Stream
+            + StreamIsPartial
+            + Compare<&'a str>
+            + Compare<Caseless<&'a str>>
+            + AsBStr
+            + Compare<char>,
+        S::Slice: Eq + Hash + AsBStr + ParseSlice<f64> + Clone,
+        S::Token: AsChar + Clone,
+        S::IterOffsets: Clone,
+        E: ParserError<S>,
+    {
+        trace(
+            "factor",
+            delimited(
+                multispace0,
+                alt((
+                    Expr::parenthesis,
+                    Unary::parser,
+                    Literal::parser.map(Expr::Literal),
+                )),
+                multispace0,
+            ),
+        )
         .parse_next(input)
     }
 }
@@ -90,7 +129,7 @@ impl std::fmt::Display for Unary {
 }
 
 impl Unary {
-    pub fn parser<S>(input: &mut S) -> ModalResult<Self>
+    pub fn parser<S, E>(input: &mut S) -> ModalResult<Expr, E>
     where
         for<'a> S: Stream
             + StreamIsPartial
@@ -101,22 +140,37 @@ impl Unary {
         S::Slice: Eq + Hash + AsBStr + ParseSlice<f64> + Clone,
         S::Token: AsChar + Clone,
         S::IterOffsets: Clone,
+        E: ParserError<S>,
     {
-        alt((
-            preceded("-", Expr::parser.map(Box::new).map(Self::Negate)),
-            preceded("!", Expr::parser.map(Box::new).map(Self::Not)),
-        ))
+        trace(
+            "unary",
+            alt((
+                preceded("-", Expr::factor.map(Box::new).map(Self::Negate)),
+                preceded("!", Expr::factor.map(Box::new).map(Self::Not)),
+            )),
+        )
+        .map(Expr::Unary)
         .parse_next(input)
     }
 }
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Binary {
-    Add(Box<Expr>, Box<Expr>),
+    Mul(Box<Expr>, Box<Expr>),
+    Div(Box<Expr>, Box<Expr>),
+}
+
+impl std::fmt::Display for Binary {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        match self {
+            Self::Mul(l, r) => write!(f, "(* {} {})", l, r),
+            Self::Div(l, r) => write!(f, "(/ {} {})", l, r),
+        }
+    }
 }
 
 impl Binary {
-    pub fn parser<S>(input: &mut S) -> ModalResult<Self>
+    pub fn term<S, E>(input: &mut S) -> ModalResult<Expr, E>
     where
         for<'a> S: Stream
             + StreamIsPartial
@@ -127,11 +181,22 @@ impl Binary {
         S::Slice: Eq + Hash + AsBStr + ParseSlice<f64> + Clone,
         S::Token: AsChar + Clone,
         S::IterOffsets: Clone,
+        E: ParserError<S>,
     {
-        let left = Expr::parser.parse_next(input)?;
-        let _ = "+".parse_next(input)?;
-        let right = Expr::parser.parse_next(input)?;
-        Ok(Self::Add(Box::new(left), Box::new(right)))
+        let init = Expr::factor(input)?;
+
+        trace(
+            "mul/div",
+            repeat(0.., (one_of(['*', '/']), Expr::factor)).fold(
+                move || init.clone(),
+                |acc, (op, val): (S::Token, Expr)| match op.as_char() {
+                    '*' => Expr::Binary(Self::Mul(Box::new(acc), Box::new(val))),
+                    '/' => Expr::Binary(Self::Div(Box::new(acc), Box::new(val))),
+                    _ => unreachable!(),
+                },
+            ),
+        )
+        .parse_next(input)
     }
 }
 
@@ -145,7 +210,7 @@ pub enum Literal {
 }
 
 impl Literal {
-    pub fn parser<S>(input: &mut S) -> ModalResult<Self>
+    pub fn parser<S, E>(input: &mut S) -> ModalResult<Self, E>
     where
         for<'a> S: Stream
             + StreamIsPartial
@@ -156,22 +221,26 @@ impl Literal {
         S::Slice: Eq + Hash + AsBStr + ParseSlice<f64> + Clone,
         S::Token: AsChar + Clone,
         S::IterOffsets: Clone,
+        E: ParserError<S>,
     {
-        delimited(
-            multispace0,
-            alt((
-                "true".value(Self::True),
-                "false".value(Self::False),
-                "nil".value(Self::Nil),
-                float.map(Self::Number),
-                Self::string,
-            )),
-            multispace0,
+        trace(
+            "literal",
+            delimited(
+                multispace0,
+                alt((
+                    "true".value(Self::True),
+                    "false".value(Self::False),
+                    "nil".value(Self::Nil),
+                    Self::number,
+                    Self::string,
+                )),
+                multispace0,
+            ),
         )
         .parse_next(input)
     }
 
-    fn string<S>(input: &mut S) -> ModalResult<Self>
+    fn number<S, E>(input: &mut S) -> ModalResult<Self, E>
     where
         for<'a> S: Stream
             + StreamIsPartial
@@ -182,13 +251,42 @@ impl Literal {
         S::Slice: Eq + Hash + AsBStr + ParseSlice<f64> + Clone,
         S::Token: AsChar + Clone,
         S::IterOffsets: Clone,
+        E: ParserError<S>,
     {
-        preceded(
-            "\"",
-            cut_err(terminated(
-                take_till(0.., '"'),
-                "\"".context(StrContext::Expected("terminating `\"`".into())),
-            )),
+        trace("number", move |input: &mut S| {
+            let it = alt(((".", digit1).void(), (digit1, opt(('.', digit1))).void()))
+                .take()
+                .parse_next(input)?;
+            it.parse_slice()
+                .map(Self::Number)
+                .ok_or_else(|| ParserError::from_input(input))
+        })
+        .parse_next(input)
+    }
+
+    fn string<S, E>(input: &mut S) -> ModalResult<Self, E>
+    where
+        for<'a> S: Stream
+            + StreamIsPartial
+            + Compare<&'a str>
+            + Compare<Caseless<&'a str>>
+            + AsBStr
+            + Compare<char>,
+        S::Slice: Eq + Hash + AsBStr + ParseSlice<f64> + Clone,
+        S::Token: AsChar + Clone,
+        S::IterOffsets: Clone,
+        E: ParserError<S>,
+    {
+        trace(
+            "string",
+            preceded(
+                "\"",
+                cut_err(terminated(
+                    take_till(0.., '"'),
+                    "\"",
+                    // .context(StrContext::Expected("terminating `\"`".into())),
+                )),
+            ),
         )
         .map(|s: S::Slice| Self::String(std::str::from_utf8(s.as_bstr()).unwrap().to_string()))
         .parse_next(input)
@@ -207,12 +305,111 @@ impl std::fmt::Display for Literal {
     }
 }
 
-pub fn parse(input: &str) -> Result<(), error::Error> {
-    let expr = Expr::parser
-        .parse(input)
+pub fn parse(input: &str) -> Result<Expr, error::Error> {
+    let expr = Expr::parser::<_, winnow::error::TreeError<_>>
+        .parse(LocatingSlice::new(input))
         .map_err(|e| error::Error::ParseError(format!("{e}")))?;
 
-    println!("{}", expr);
+    Ok(expr)
+}
 
-    Ok(())
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn test_bool() -> anyhow::Result<()> {
+        let input = "true\n";
+        let res = parse(input)?;
+        assert_eq!(res, Expr::Literal(Literal::True));
+
+        let input = "false   \t";
+        let res = parse(input)?;
+        assert_eq!(res, Expr::Literal(Literal::False));
+        Ok(())
+    }
+
+    #[test]
+    fn test_nil() -> anyhow::Result<()> {
+        let input = "     nil   ";
+        let res = parse(input)?;
+        assert_eq!(res, Expr::Literal(Literal::Nil));
+        Ok(())
+    }
+
+    #[test]
+    fn test_number() -> anyhow::Result<()> {
+        let input = "123.45";
+        let res = parse(input)?;
+        assert_eq!(res, Expr::Literal(Literal::Number(123.45)));
+        Ok(())
+    }
+
+    #[test]
+    fn test_string() -> anyhow::Result<()> {
+        let input = "\n \"hello, world!\"";
+        let res = parse(input)?;
+        assert_eq!(
+            res,
+            Expr::Literal(Literal::String("hello, world!".to_string()))
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn test_unary() -> anyhow::Result<()> {
+        let input = "-123.45    ";
+        let res = parse(input)?;
+        assert_eq!(
+            res,
+            Expr::Unary(Unary::Negate(Box::new(Expr::Literal(Literal::Number(
+                123.45
+            )))))
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_paren() -> anyhow::Result<()> {
+        let input = "  !(  -123.45  )\t\n";
+        let res = parse(input)?;
+        assert_eq!(
+            res,
+            Expr::Unary(Unary::Not(Box::new(Expr::Group(Box::new(Expr::Unary(
+                Unary::Negate(Box::new(Expr::Literal(Literal::Number(123.45))))
+            ))))))
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_term() -> anyhow::Result<()> {
+        let input = "123.45 * 67.89 / 10.11";
+        let res = parse(input)?;
+        assert_eq!(
+            res,
+            Expr::Binary(Binary::Div(
+                Box::new(Expr::Binary(Binary::Mul(
+                    Box::new(Expr::Literal(Literal::Number(123.45))),
+                    Box::new(Expr::Literal(Literal::Number(67.89)))
+                ))),
+                Box::new(Expr::Literal(Literal::Number(10.11)))
+            ))
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_term_codecrafters() -> anyhow::Result<()> {
+        let input = "(76 * -50 / (56 * 42))";
+        let res = parse(input)?;
+        assert_eq!(
+            res.to_string(),
+            "(group (/ (* 76.0 (- 50.0)) (group (* 56.0 42.0))))",
+        );
+
+        Ok(())
+    }
 }
