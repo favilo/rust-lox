@@ -14,12 +14,14 @@ use crate::error;
 pub enum Expr {
     Literal(Literal),
     Parenthesis(Box<Expr>),
+    Unary(Unary),
 }
 
 impl std::fmt::Display for Expr {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         match self {
             Self::Literal(l) => write!(f, "{}", l),
+            Self::Unary(u) => write!(f, "{}", u),
             Self::Parenthesis(e) => write!(f, "(group {})", e),
         }
     }
@@ -42,8 +44,9 @@ impl Expr {
             multispace0,
             alt((
                 // Binary::parser.map(Self::Binary),
-                Literal::parser.map(Self::Literal),
                 Self::parenthesis,
+                Unary::parser.map(Self::Unary),
+                Literal::parser.map(Self::Literal),
             )),
             multispace0,
         )
@@ -62,9 +65,48 @@ impl Expr {
         S::Token: AsChar + Clone,
         S::IterOffsets: Clone,
     {
-        preceded("(", cut_err(delimited(multispace0, Self::parser, (multispace0, ")"))))
-            .map(|e| Self::Parenthesis(Box::new(e)))
-            .parse_next(input)
+        preceded(
+            "(",
+            cut_err(delimited(multispace0, Self::parser, (multispace0, ")"))),
+        )
+        .map(|e| Self::Parenthesis(Box::new(e)))
+        .parse_next(input)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum Unary {
+    Negate(Box<Expr>),
+    Not(Box<Expr>),
+}
+
+impl std::fmt::Display for Unary {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        match self {
+            Self::Negate(e) => write!(f, "(- {})", e),
+            Self::Not(e) => write!(f, "(! {})", e),
+        }
+    }
+}
+
+impl Unary {
+    pub fn parser<S>(input: &mut S) -> ModalResult<Self>
+    where
+        for<'a> S: Stream
+            + StreamIsPartial
+            + Compare<&'a str>
+            + Compare<Caseless<&'a str>>
+            + AsBStr
+            + Compare<char>,
+        S::Slice: Eq + Hash + AsBStr + ParseSlice<f64> + Clone,
+        S::Token: AsChar + Clone,
+        S::IterOffsets: Clone,
+    {
+        alt((
+            preceded("-", Expr::parser.map(Box::new).map(Self::Negate)),
+            preceded("!", Expr::parser.map(Box::new).map(Self::Not)),
+        ))
+        .parse_next(input)
     }
 }
 
