@@ -13,7 +13,16 @@ use crate::error;
 #[derive(Debug, Clone, PartialEq)]
 pub enum Expr {
     Literal(Literal),
-    Binary(Binary),
+    Parenthesis(Box<Expr>),
+}
+
+impl std::fmt::Display for Expr {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        match self {
+            Self::Literal(l) => write!(f, "{}", l),
+            Self::Parenthesis(e) => write!(f, "(group {})", e),
+        }
+    }
 }
 
 impl Expr {
@@ -29,11 +38,33 @@ impl Expr {
         S::Token: AsChar + Clone,
         S::IterOffsets: Clone,
     {
-        alt((
-            Binary::parser.map(Self::Binary),
-            Literal::parser.map(Self::Literal),
-        ))
+        delimited(
+            multispace0,
+            alt((
+                // Binary::parser.map(Self::Binary),
+                Literal::parser.map(Self::Literal),
+                Self::parenthesis,
+            )),
+            multispace0,
+        )
         .parse_next(input)
+    }
+
+    fn parenthesis<S>(input: &mut S) -> ModalResult<Self>
+    where
+        for<'a> S: Stream
+            + StreamIsPartial
+            + Compare<&'a str>
+            + Compare<Caseless<&'a str>>
+            + AsBStr
+            + Compare<char>,
+        S::Slice: Eq + Hash + AsBStr + ParseSlice<f64> + Clone,
+        S::Token: AsChar + Clone,
+        S::IterOffsets: Clone,
+    {
+        preceded("(", cut_err(delimited(multispace0, Self::parser, (multispace0, ")"))))
+            .map(|e| Self::Parenthesis(Box::new(e)))
+            .parse_next(input)
     }
 }
 
@@ -135,7 +166,7 @@ impl std::fmt::Display for Literal {
 }
 
 pub fn parse(input: &str) -> Result<(), error::Error> {
-    let expr = Literal::parser
+    let expr = Expr::parser
         .parse(input)
         .map_err(|e| error::Error::ParseError(format!("{e}")))?;
 
