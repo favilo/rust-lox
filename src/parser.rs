@@ -50,7 +50,7 @@ impl Expr {
                 multispace0,
                 alt((
                     // Binary::parser.map(Self::Binary),
-                    Expr::term,
+                    Expr::comparison,
                 )),
                 multispace0,
             ),
@@ -58,7 +58,7 @@ impl Expr {
         .parse_next(input)
     }
 
-    fn parenthesis<S, E>(input: &mut S) -> ModalResult<Self, E>
+    pub fn comparison<S, E>(input: &mut S) -> ModalResult<Expr, E>
     where
         for<'a> S: Stream
             + StreamIsPartial
@@ -71,14 +71,21 @@ impl Expr {
         S::IterOffsets: Clone,
         E: ParserError<S>,
     {
+        let init = trace("First term", Expr::term).parse_next(input)?;
+
         trace(
-            "parenthesis",
-            preceded(
-                "(",
-                cut_err(delimited(multispace0, Self::parser, (multispace0, ")"))),
+            "rest of comparison",
+            repeat(0.., (alt(("<=", ">=", "<", ">")), Expr::term)).fold(
+                move || init.clone(),
+                |acc, (op, val): (S::Slice, Expr)| match op.as_bstr() {
+                    b"<=" => Expr::Binary(Binary::LessEq(Box::new(acc), Box::new(val))),
+                    b">=" => Expr::Binary(Binary::GreaterEq(Box::new(acc), Box::new(val))),
+                    b"<" => Expr::Binary(Binary::LessThan(Box::new(acc), Box::new(val))),
+                    b">" => Expr::Binary(Binary::GreaterThan(Box::new(acc), Box::new(val))),
+                    _ => unreachable!(),
+                },
             ),
         )
-        .map(|e| Self::Group(Box::new(e)))
         .parse_next(input)
     }
 
@@ -208,6 +215,30 @@ impl Expr {
         )
         .parse_next(input)
     }
+
+    fn parenthesis<S, E>(input: &mut S) -> ModalResult<Self, E>
+    where
+        for<'a> S: Stream
+            + StreamIsPartial
+            + Compare<&'a str>
+            + Compare<Caseless<&'a str>>
+            + AsBStr
+            + Compare<char>,
+        S::Slice: Eq + Hash + AsBStr + ParseSlice<f64> + Clone,
+        S::Token: AsChar + Clone,
+        S::IterOffsets: Clone,
+        E: ParserError<S>,
+    {
+        trace(
+            "parenthesis",
+            preceded(
+                "(",
+                cut_err(delimited(multispace0, Self::parser, (multispace0, ")"))),
+            ),
+        )
+        .map(|e| Self::Group(Box::new(e)))
+        .parse_next(input)
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -231,6 +262,10 @@ pub enum Binary {
     Div(Box<Expr>, Box<Expr>),
     Add(Box<Expr>, Box<Expr>),
     Sub(Box<Expr>, Box<Expr>),
+    LessThan(Box<Expr>, Box<Expr>),
+    GreaterThan(Box<Expr>, Box<Expr>),
+    LessEq(Box<Expr>, Box<Expr>),
+    GreaterEq(Box<Expr>, Box<Expr>),
 }
 
 impl std::fmt::Display for Binary {
@@ -240,6 +275,10 @@ impl std::fmt::Display for Binary {
             Self::Div(l, r) => write!(f, "(/ {} {})", l, r),
             Self::Add(l, r) => write!(f, "(+ {} {})", l, r),
             Self::Sub(l, r) => write!(f, "(- {} {})", l, r),
+            Self::LessThan(l, r) => write!(f, "(< {} {})", l, r),
+            Self::GreaterThan(l, r) => write!(f, "(> {} {})", l, r),
+            Self::LessEq(l, r) => write!(f, "(<= {} {})", l, r),
+            Self::GreaterEq(l, r) => write!(f, "(>= {} {})", l, r),
         }
     }
 }
@@ -473,6 +512,14 @@ mod tests {
         let input = r#""hello" + "world""#;
         let res = parse(input)?;
         assert_eq!(res.to_string(), "(+ hello world)",);
+        Ok(())
+    }
+
+    #[test]
+    fn test_comparison() -> anyhow::Result<()> {
+        let input = "83 < 99 < 115";
+        let res = parse(input)?;
+        assert_eq!(res.to_string(), "(< (< 83.0 99.0) 115.0)");
         Ok(())
     }
 }
