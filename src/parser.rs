@@ -25,6 +25,18 @@ pub enum Expr {
     Binary(Binary),
 }
 
+impl Expr {
+    pub fn evaluate(&self) -> Result<Literal, Error<'_, Input<'_>>> {
+        match self {
+            Self::Literal(l) => Ok(l.clone()),
+            _ => todo!(),
+            // Self::Group(e) => e.evaluate(),
+            // Self::Unary(u) => u.evaluate(),
+            // Self::Binary(b) => b.evaluate(),
+        }
+    }
+}
+
 impl std::fmt::Display for Expr {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         match self {
