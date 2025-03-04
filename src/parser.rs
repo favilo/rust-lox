@@ -1,10 +1,11 @@
 use std::hash::Hash;
 use winnow::{
     ascii::{digit1, multispace0, Caseless},
-    combinator::{alt, cut_err, delimited, opt, preceded, repeat, terminated, trace},
+    combinator::{alt, cut_err, delimited, empty, fail, opt, preceded, repeat, terminated, trace},
+    dispatch,
     error::ParserError,
     stream::{AsBStr, AsChar, Compare, ParseSlice, Stream, StreamIsPartial},
-    token::{one_of, take_till},
+    token::{any, one_of, take_till},
     LocatingSlice, ModalResult, Parser,
 };
 
@@ -49,10 +50,7 @@ impl Expr {
                 multispace0,
                 alt((
                     // Binary::parser.map(Self::Binary),
-                    Self::parenthesis,
-                    Unary::parser,
-                    Binary::term,
-                    Literal::parser.map(Self::Literal),
+                    Expr::term,
                 )),
                 multispace0,
             ),
@@ -84,7 +82,110 @@ impl Expr {
         .parse_next(input)
     }
 
-    pub fn factor<S, E>(input: &mut S) -> ModalResult<Self, E>
+    pub fn term<S, E>(input: &mut S) -> ModalResult<Expr, E>
+    where
+        for<'a> S: Stream
+            + StreamIsPartial
+            + Compare<&'a str>
+            + Compare<Caseless<&'a str>>
+            + AsBStr
+            + Compare<char>,
+        S::Slice: Eq + Hash + AsBStr + ParseSlice<f64> + Clone,
+        S::Token: AsChar + Clone,
+        S::IterOffsets: Clone,
+        E: ParserError<S>,
+    {
+        let init = trace("First factor", Expr::factor).parse_next(input)?;
+
+        trace(
+            "rest of term",
+            repeat(0.., (one_of(['+', '-']), Expr::factor)).fold(
+                move || init.clone(),
+                |acc, (op, val): (S::Token, Expr)| match op.as_char() {
+                    '+' => Expr::Binary(Binary::Add(Box::new(acc), Box::new(val))),
+                    '-' => Expr::Binary(Binary::Sub(Box::new(acc), Box::new(val))),
+                    _ => unreachable!(),
+                },
+            ),
+        )
+        .parse_next(input)
+    }
+
+    pub fn factor<S, E>(input: &mut S) -> ModalResult<Expr, E>
+    where
+        for<'a> S: Stream
+            + StreamIsPartial
+            + Compare<&'a str>
+            + Compare<Caseless<&'a str>>
+            + AsBStr
+            + Compare<char>,
+        S::Slice: Eq + Hash + AsBStr + ParseSlice<f64> + Clone,
+        S::Token: AsChar + Clone,
+        S::IterOffsets: Clone,
+        E: ParserError<S>,
+    {
+        let init = trace("First unary", Expr::unary).parse_next(input)?;
+
+        trace(
+            "rest of factor",
+            repeat(0.., (one_of(['*', '/']), Expr::unary)).fold(
+                move || init.clone(),
+                |acc, (op, val): (S::Token, Expr)| match op.as_char() {
+                    '*' => Expr::Binary(Binary::Mul(Box::new(acc), Box::new(val))),
+                    '/' => Expr::Binary(Binary::Div(Box::new(acc), Box::new(val))),
+                    _ => unreachable!(),
+                },
+            ),
+        )
+        .parse_next(input)
+    }
+
+    pub fn unary<S, E>(input: &mut S) -> ModalResult<Expr, E>
+    where
+        for<'a> S: Stream
+            + StreamIsPartial
+            + Compare<&'a str>
+            + Compare<Caseless<&'a str>>
+            + AsBStr
+            + Compare<char>,
+        S::Slice: Eq + Hash + AsBStr + ParseSlice<f64> + Clone,
+        S::Token: AsChar + Clone,
+        S::IterOffsets: Clone,
+        E: ParserError<S>,
+    {
+        #[derive(Debug, Clone, Copy)]
+        enum Sign {
+            Negate,
+            Not,
+        }
+
+        let operator = trace(
+            "operator",
+            dispatch! {any.map(AsChar::as_char);
+                '-' => empty.value(Sign::Negate),
+                '!' => empty.value(Sign::Not),
+                _ => fail,
+            },
+        );
+
+        alt((
+            trace(
+                "unary",
+                (
+                    delimited(multispace0, operator, multispace0),
+                    terminated(Expr::unary, multispace0),
+                )
+                    .map(|(neg, e)| match neg {
+                        Sign::Negate => Expr::Unary(Unary::Negate(Box::new(e))),
+                        Sign::Not => Expr::Unary(Unary::Not(Box::new(e))),
+                    }),
+            ),
+            trace("no unary", Expr::primary),
+        ))
+        .parse_next(input)
+    }
+
+    pub fn primary<S, E>(input: &mut S) -> ModalResult<Self, E>
     where
         for<'a> S: Stream
             + StreamIsPartial
@@ -98,14 +199,10 @@ impl Expr {
         E: ParserError<S>,
     {
         trace(
-            "factor",
+            "primary",
             delimited(
                 multispace0,
-                alt((
-                    Expr::parenthesis,
-                    Unary::parser,
-                    Literal::parser.map(Expr::Literal),
-                )),
+                alt((Expr::parenthesis, Literal::literal.map(Expr::Literal))),
                 multispace0,
             ),
         )
@@ -128,36 +225,12 @@ impl std::fmt::Display for Unary {
     }
 }
 
-impl Unary {
-    pub fn parser<S, E>(input: &mut S) -> ModalResult<Expr, E>
-    where
-        for<'a> S: Stream
-            + StreamIsPartial
-            + Compare<&'a str>
-            + Compare<Caseless<&'a str>>
-            + AsBStr
-            + Compare<char>,
-        S::Slice: Eq + Hash + AsBStr + ParseSlice<f64> + Clone,
-        S::Token: AsChar + Clone,
-        S::IterOffsets: Clone,
-        E: ParserError<S>,
-    {
-        trace(
-            "unary",
-            alt((
-                preceded("-", Expr::factor.map(Box::new).map(Self::Negate)),
-                preceded("!", Expr::factor.map(Box::new).map(Self::Not)),
-            )),
-        )
-        .map(Expr::Unary)
-        .parse_next(input)
-    }
-}
-
 #[derive(Debug, Clone, PartialEq)]
 pub enum Binary {
     Mul(Box<Expr>, Box<Expr>),
     Div(Box<Expr>, Box<Expr>),
+    Add(Box<Expr>, Box<Expr>),
+    Sub(Box<Expr>, Box<Expr>),
 }
 
 impl std::fmt::Display for Binary {
@@ -165,38 +238,9 @@ impl std::fmt::Display for Binary {
         match self {
             Self::Mul(l, r) => write!(f, "(* {} {})", l, r),
             Self::Div(l, r) => write!(f, "(/ {} {})", l, r),
+            Self::Add(l, r) => write!(f, "(+ {} {})", l, r),
+            Self::Sub(l, r) => write!(f, "(- {} {})", l, r),
         }
-    }
-}
-
-impl Binary {
-    pub fn term<S, E>(input: &mut S) -> ModalResult<Expr, E>
-    where
-        for<'a> S: Stream
-            + StreamIsPartial
-            + Compare<&'a str>
-            + Compare<Caseless<&'a str>>
-            + AsBStr
-            + Compare<char>,
-        S::Slice: Eq + Hash + AsBStr + ParseSlice<f64> + Clone,
-        S::Token: AsChar + Clone,
-        S::IterOffsets: Clone,
-        E: ParserError<S>,
-    {
-        let init = Expr::factor(input)?;
-
-        trace(
-            "mul/div",
-            repeat(0.., (one_of(['*', '/']), Expr::factor)).fold(
-                move || init.clone(),
-                |acc, (op, val): (S::Token, Expr)| match op.as_char() {
-                    '*' => Expr::Binary(Self::Mul(Box::new(acc), Box::new(val))),
-                    '/' => Expr::Binary(Self::Div(Box::new(acc), Box::new(val))),
-                    _ => unreachable!(),
-                },
-            ),
-        )
-        .parse_next(input)
     }
 }
 
@@ -210,7 +254,7 @@ pub enum Literal {
 }
 
 impl Literal {
-    pub fn parser<S, E>(input: &mut S) -> ModalResult<Self, E>
+    pub fn literal<S, E>(input: &mut S) -> ModalResult<Self, E>
     where
         for<'a> S: Stream
             + StreamIsPartial
@@ -410,6 +454,25 @@ mod tests {
             "(group (/ (* 76.0 (- 50.0)) (group (* 56.0 42.0))))",
         );
 
+        Ok(())
+    }
+
+    #[test]
+    fn test_add_sub_codecrafters() -> anyhow::Result<()> {
+        let input = "(72 * -62 / (42 * 98))";
+        let res = parse(input)?;
+        assert_eq!(
+            res.to_string(),
+            "(group (/ (* 72.0 (- 62.0)) (group (* 42.0 98.0))))",
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn test_hello_plus_world() -> anyhow::Result<()> {
+        let input = r#""hello" + "world""#;
+        let res = parse(input)?;
+        assert_eq!(res.to_string(), "(+ hello world)",);
         Ok(())
     }
 }
