@@ -29,8 +29,8 @@ impl Expr {
     pub fn evaluate(&self) -> Result<Literal, Error<'_, Input<'_>>> {
         match self {
             Self::Literal(l) => Ok(l.clone()),
+            Self::Group(e) => e.evaluate(),
             _ => todo!(),
-            // Self::Group(e) => e.evaluate(),
             // Self::Unary(u) => u.evaluate(),
             // Self::Binary(b) => b.evaluate(),
         }
