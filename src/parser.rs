@@ -283,20 +283,36 @@ impl Evaluate for Binary {
         match self {
             Self::Mul(l, r) => Ok(match (l.evaluate()?, r.evaluate()?) {
                 (Literal::Number(l), Literal::Number(r)) => Literal::from(l * r),
-                _ => todo!(),
+                _ => {
+                    return Err(Error::from(EvaluateError::TypeMismatch {
+                        expected: "number".into(),
+                    }))
+                }
             }),
             Self::Div(l, r) => Ok(match (l.evaluate()?, r.evaluate()?) {
                 (Literal::Number(l), Literal::Number(r)) => Literal::from(l / r),
-                _ => todo!(),
+                _ => {
+                    return Err(Error::from(EvaluateError::TypeMismatch {
+                        expected: "number".into(),
+                    }))
+                }
             }),
             Self::Add(l, r) => Ok(match (l.evaluate()?, r.evaluate()?) {
                 (Literal::Number(l), Literal::Number(r)) => Literal::from(l + r),
                 (Literal::String(s), Literal::String(t)) => Literal::from(format!("{}{}", s, t)),
-                _ => todo!(),
+                _ => {
+                    return Err(Error::from(EvaluateError::TypeMismatch {
+                        expected: "number or string".into(),
+                    }))
+                }
             }),
             Self::Sub(l, r) => Ok(match (l.evaluate()?, r.evaluate()?) {
                 (Literal::Number(l), Literal::Number(r)) => Literal::from(l - r),
-                _ => todo!(),
+                _ => {
+                    return Err(Error::from(EvaluateError::TypeMismatch {
+                        expected: "number".into(),
+                    }))
+                }
             }),
             Self::LessThan(l, r) => Ok(match (l.evaluate()?, r.evaluate()?) {
                 (Literal::Number(l), Literal::Number(r)) => Literal::from(l < r),
