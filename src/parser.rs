@@ -40,6 +40,7 @@ impl Expr {
 impl std::fmt::Display for Expr {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         match self {
+            Self::Literal(Literal::Number(n)) => write!(f, "{:?}", n),
             Self::Literal(l) => write!(f, "{}", l),
             Self::Unary(u) => write!(f, "{}", u),
             Self::Binary(b) => write!(f, "{}", b),
@@ -357,7 +358,7 @@ impl std::fmt::Display for Literal {
             Self::True => write!(f, "true"),
             Self::False => write!(f, "false"),
             Self::Nil => write!(f, "nil"),
-            Self::Number(n) => write!(f, "{n:?}"),
+            Self::Number(n) => write!(f, "{n}"),
             Self::String(s) => write!(f, "{s}"),
         }
     }
