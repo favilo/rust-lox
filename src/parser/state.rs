@@ -147,7 +147,7 @@ impl<T: Clone, S> Clone for StateCheckpoint<T, S> {
     fn clone(&self) -> Self {
         Self {
             inner: self.inner.clone(),
-            state: self.state.clone(),
+            state: self.state,
             stream: Default::default(),
         }
     }

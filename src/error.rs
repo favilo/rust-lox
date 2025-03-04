@@ -80,7 +80,7 @@ impl<'s, S: Stream> From<winnow::error::ParseError<S, Error<'s, S>>> for Error<'
     }
 }
 
-impl<'s, S> std::error::Error for Error<'s, S>
+impl<S> std::error::Error for Error<'_, S>
 where
     S: Stream + Display,
     S::Slice: Display,
@@ -93,7 +93,7 @@ where
     }
 }
 
-impl<'s, S: Stream + Clone> ParserError<S> for Error<'s, S> {
+impl<S: Stream + Clone> ParserError<S> for Error<'_, S> {
     type Inner = Self;
 
     fn from_input(input: &S) -> Self {
@@ -105,7 +105,7 @@ impl<'s, S: Stream + Clone> ParserError<S> for Error<'s, S> {
     }
 }
 
-impl<'s, C, S: Stream> AddContext<S, C> for Error<'s, S> {
+impl<C, S: Stream> AddContext<S, C> for Error<'_, S> {
     #[inline]
     fn add_context(
         self,
@@ -117,8 +117,8 @@ impl<'s, C, S: Stream> AddContext<S, C> for Error<'s, S> {
     }
 }
 
-impl<'s, S: Stream + Clone, E: std::error::Error + Send + Sync + 'static> FromExternalError<S, E>
-    for Error<'s, S>
+impl<S: Stream + Clone, E: std::error::Error + Send + Sync + 'static> FromExternalError<S, E>
+    for Error<'_, S>
 {
     #[inline]
     fn from_external_error(input: &S, e: E) -> Self {
