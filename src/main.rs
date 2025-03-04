@@ -1,6 +1,6 @@
 use std::{fs, path::PathBuf};
 
-use ast::{Ast, Evaluate};
+use ast::{Evaluate, Run};
 use clap::{Parser, Subcommand};
 
 mod ast;
@@ -19,6 +19,7 @@ enum Command {
     Tokenize(Common),
     Parse(Common),
     Evaluate(Common),
+    Run(Common),
 }
 
 #[derive(Debug, clap::Args)]
@@ -67,13 +68,29 @@ fn main() {
                 eprintln!("Failed to parse file {}", res.unwrap_err());
                 std::process::exit(65);
             };
-            let ast = Ast::new(expr);
-            let res = ast.evaluate();
+            let res = expr.evaluate();
             let Ok(result) = res else {
                 eprintln!("Failed to evaluate file {}", res.unwrap_err());
                 std::process::exit(70);
             };
             println!("{}", result);
+        }
+        Command::Run(command) => {
+            let filename = &command.file_name;
+            let file_contents = fs::read_to_string(filename).unwrap_or_else(|_| {
+                eprintln!("Failed to read file {}", filename.display());
+                String::new()
+            });
+            let res = ast::parse(&file_contents);
+            let Ok(ast) = res else {
+                eprintln!("Failed to parse file {}", res.unwrap_err());
+                std::process::exit(65);
+            };
+            let res = ast.run();
+            if res.is_err() {
+                eprintln!("Failed to run file {}", res.unwrap_err());
+                std::process::exit(70);
+            };
         }
     }
 }

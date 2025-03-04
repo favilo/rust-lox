@@ -1,7 +1,10 @@
 use std::hash::Hash;
 use winnow::{
     ascii::{digit1, Caseless},
-    combinator::{alt, cut_err, delimited, empty, fail, opt, preceded, repeat, terminated, trace},
+    combinator::{
+        alt, cut_err, delimited, empty, eof, fail, opt, preceded, repeat, repeat_till, terminated,
+        trace,
+    },
     dispatch,
     error::{ErrMode, ParserError},
     stream::{AsBStr, AsChar, Compare, ParseSlice, Stream, StreamIsPartial},
@@ -510,7 +513,23 @@ impl std::fmt::Display for Literal {
     }
 }
 
-fn tracking_new_line<'s>(input: &mut Input<'s>) -> ModalResult<(), Error<'s, Input<'s>>>
+pub fn comment<'s>(input: &mut Input<'s>) -> ModalResult<(), Error<'s, Input<'s>>>
+where
+    for<'a> Input<'a>: Stream<Token = char>,
+{
+    trace(
+        "comment",
+        delimited(
+            "//",
+            repeat_till::<_, _, (), _, _, _, _>(0.., any, alt((tracking_new_line, eof.void()))),
+            opt(tracking_new_line),
+        ),
+    )
+    .void()
+    .parse_next(input)
+}
+
+pub fn tracking_new_line<'s>(input: &mut Input<'s>) -> ModalResult<(), Error<'s, Input<'s>>>
 where
     for<'a> Input<'a>: Stream<Token = char>,
 {
@@ -519,12 +538,12 @@ where
     Ok(())
 }
 
-fn tracking_multispace<'s>(input: &mut Input<'s>) -> ModalResult<(), Error<'s, Input<'s>>> {
+pub fn tracking_multispace<'s>(input: &mut Input<'s>) -> ModalResult<(), Error<'s, Input<'s>>> {
     trace(
         "tracking_multispace",
         repeat::<_, _, (), _, _>(
             0..,
-            alt((one_of([' ', '\t', '\r']).void(), tracking_new_line)),
+            alt((one_of([' ', '\t', '\r']).void(), comment, tracking_new_line)),
         ),
     )
     .parse_next(input)

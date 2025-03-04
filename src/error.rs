@@ -61,12 +61,16 @@ impl<'s> ParseError<'s> {
 
 impl Display for ParseError<'_> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let input = if self.input.offset_at(0).expect("tokens 0") >= self.input.eof_offset() {
+            "[EOF]"
+        } else {
+            &format!("'{}'", self.input.peek_slice(1))
+        };
+
         write!(
             f,
-            "[line {}] Error at '{}': {}",
-            self.line,
-            self.input.peek_slice(1),
-            self.message
+            "[line {}] Error at {}: {}",
+            self.line, input, self.message
         )
     }
 }

@@ -1,1 +1,2 @@
-"foo world"
+// comments
+print "foo world";
