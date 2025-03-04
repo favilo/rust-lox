@@ -19,6 +19,8 @@ pub enum Error<'s, S: Stream> {
     },
 
     Parse(ParseError<'s>),
+
+    Evaluate(EvaluateError),
 }
 
 impl<S> Display for Error<'_, S>
@@ -34,6 +36,7 @@ where
                 write!(f, "External error at '{}': {}", input, cause)
             }
             Self::Parse(err) => write!(f, "{}", err),
+            Self::Evaluate(err) => write!(f, "{}", err),
         }
     }
 }
@@ -125,6 +128,25 @@ impl<S: Stream + Clone, E: std::error::Error + Send + Sync + 'static> FromExtern
         Error::External {
             cause: Box::new(e),
             input: input.clone(),
+        }
+    }
+}
+
+#[derive(Debug)]
+pub enum EvaluateError {
+    TypeMismatch { expected: String },
+}
+
+impl From<EvaluateError> for Error<'_, Input<'_>> {
+    fn from(err: EvaluateError) -> Self {
+        Error::Evaluate(err)
+    }
+}
+
+impl Display for EvaluateError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::TypeMismatch { expected } => write!(f, "Operand must be a {}", expected),
         }
     }
 }

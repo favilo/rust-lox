@@ -15,7 +15,7 @@ pub(crate) mod state;
 
 use crate::{
     ast::Evaluate,
-    error::{Error, ParseError},
+    error::{Error, EvaluateError, ParseError},
 };
 
 pub(crate) type Input<'s> = Stateful<LocatingSlice<&'s str>>;
@@ -238,7 +238,11 @@ impl Evaluate for Unary {
         match self {
             Self::Negate(e) => Ok(match e.evaluate()? {
                 Literal::Number(n) => Literal::Number(-n),
-                _ => todo!(),
+                _ => {
+                    return Err(Error::from(EvaluateError::TypeMismatch {
+                        expected: "number".into(),
+                    }))
+                }
             }),
             Self::Not(e) => Ok(match e.evaluate()? {
                 Literal::Nil => Literal::True,

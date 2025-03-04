@@ -71,7 +71,7 @@ fn main() {
             let res = ast.evaluate();
             let Ok(result) = res else {
                 eprintln!("Failed to evaluate file {}", res.unwrap_err());
-                std::process::exit(65);
+                std::process::exit(70);
             };
             println!("{}", result);
         }
