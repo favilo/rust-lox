@@ -13,7 +13,10 @@ use self::state::{State, Stateful};
 
 pub(crate) mod state;
 
-use crate::error::{Error, ParseError};
+use crate::{
+    ast::Evaluate,
+    error::{Error, ParseError},
+};
 
 pub(crate) type Input<'s> = Stateful<LocatingSlice<&'s str>>;
 
@@ -25,14 +28,13 @@ pub enum Expr {
     Binary(Binary),
 }
 
-impl Expr {
-    pub fn evaluate(&self) -> Result<Literal, Error<'_, Input<'_>>> {
+impl Evaluate for Expr {
+    fn evaluate(&self) -> Result<Literal, Error<'_, Input<'_>>> {
         match self {
             Self::Literal(l) => Ok(l.clone()),
             Self::Group(e) => e.evaluate(),
             Self::Unary(u) => u.evaluate(),
-            _ => todo!(),
-            // Self::Binary(b) => b.evaluate(),
+            Self::Binary(b) => b.evaluate(),
         }
     }
 }
@@ -231,8 +233,8 @@ pub enum Unary {
     Not(Box<Expr>),
 }
 
-impl Unary {
-    pub fn evaluate(&self) -> Result<Literal, Error<'_, Input<'_>>> {
+impl Evaluate for Unary {
+    fn evaluate(&self) -> Result<Literal, Error<'_, Input<'_>>> {
         match self {
             Self::Negate(e) => Ok(match e.evaluate()? {
                 Literal::Number(n) => Literal::Number(-n),
@@ -270,6 +272,22 @@ pub enum Binary {
     GreaterEq(Box<Expr>, Box<Expr>),
     Equals(Box<Expr>, Box<Expr>),
     NotEquals(Box<Expr>, Box<Expr>),
+}
+
+impl Evaluate for Binary {
+    fn evaluate(&self) -> Result<Literal, Error<'_, Input<'_>>> {
+        match self {
+            Self::Mul(l, r) => Ok(match (l.evaluate()?, r.evaluate()?) {
+                (Literal::Number(l), Literal::Number(r)) => Literal::Number(l * r),
+                _ => todo!(),
+            }),
+            Self::Div(l, r) => Ok(match (l.evaluate()?, r.evaluate()?) {
+                (Literal::Number(l), Literal::Number(r)) => Literal::Number(l / r),
+                _ => todo!(),
+            }),
+            _ => todo!(),
+        }
+    }
 }
 
 impl std::fmt::Display for Binary {

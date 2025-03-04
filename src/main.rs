@@ -1,6 +1,6 @@
 use std::{fs, path::PathBuf};
 
-use ast::Ast;
+use ast::{Ast, Evaluate};
 use clap::{Parser, Subcommand};
 
 mod ast;
