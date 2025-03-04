@@ -287,6 +287,7 @@ impl Evaluate for Binary {
             }),
             Self::Add(l, r) => Ok(match (l.evaluate()?, r.evaluate()?) {
                 (Literal::Number(l), Literal::Number(r)) => Literal::Number(l + r),
+                (Literal::String(s), Literal::String(t)) => Literal::String(format!("{}{}", s, t)),
                 _ => todo!(),
             }),
             Self::Sub(l, r) => Ok(match (l.evaluate()?, r.evaluate()?) {
