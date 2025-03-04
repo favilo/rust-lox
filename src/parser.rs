@@ -50,9 +50,38 @@ impl Expr {
                 multispace0,
                 alt((
                     // Binary::parser.map(Self::Binary),
-                    Expr::comparison,
+                    Expr::equality,
                 )),
                 multispace0,
+            ),
+        )
+        .parse_next(input)
+    }
+
+    pub fn equality<S, E>(input: &mut S) -> ModalResult<Expr, E>
+    where
+        for<'a> S: Stream
+            + StreamIsPartial
+            + Compare<&'a str>
+            + Compare<Caseless<&'a str>>
+            + AsBStr
+            + Compare<char>,
+        S::Slice: Eq + Hash + AsBStr + ParseSlice<f64> + Clone,
+        S::Token: AsChar + Clone,
+        S::IterOffsets: Clone,
+        E: ParserError<S>,
+    {
+        let init = trace("First comparison", Expr::comparison).parse_next(input)?;
+
+        trace(
+            "rest of equality",
+            repeat(0.., (alt(("==", "!=")), Expr::comparison)).fold(
+                move || init.clone(),
+                |acc, (op, val): (S::Slice, Expr)| match op.as_bstr() {
+                    b"==" => Expr::Binary(Binary::Equals(Box::new(acc), Box::new(val))),
+                    b"!=" => Expr::Binary(Binary::NotEquals(Box::new(acc), Box::new(val))),
+                    _ => unreachable!(),
+                },
             ),
         )
         .parse_next(input)
@@ -266,6 +295,8 @@ pub enum Binary {
     GreaterThan(Box<Expr>, Box<Expr>),
     LessEq(Box<Expr>, Box<Expr>),
     GreaterEq(Box<Expr>, Box<Expr>),
+    Equals(Box<Expr>, Box<Expr>),
+    NotEquals(Box<Expr>, Box<Expr>),
 }
 
 impl std::fmt::Display for Binary {
@@ -279,6 +310,8 @@ impl std::fmt::Display for Binary {
             Self::GreaterThan(l, r) => write!(f, "(> {} {})", l, r),
             Self::LessEq(l, r) => write!(f, "(<= {} {})", l, r),
             Self::GreaterEq(l, r) => write!(f, "(>= {} {})", l, r),
+            Self::Equals(l, r) => write!(f, "(== {} {})", l, r),
+            Self::NotEquals(l, r) => write!(f, "(!= {} {})", l, r),
         }
     }
 }
