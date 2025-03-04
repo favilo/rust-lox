@@ -285,6 +285,14 @@ impl Evaluate for Binary {
                 (Literal::Number(l), Literal::Number(r)) => Literal::Number(l / r),
                 _ => todo!(),
             }),
+            Self::Add(l, r) => Ok(match (l.evaluate()?, r.evaluate()?) {
+                (Literal::Number(l), Literal::Number(r)) => Literal::Number(l + r),
+                _ => todo!(),
+            }),
+            Self::Sub(l, r) => Ok(match (l.evaluate()?, r.evaluate()?) {
+                (Literal::Number(l), Literal::Number(r)) => Literal::Number(l - r),
+                _ => todo!(),
+            }),
             _ => todo!(),
         }
     }
