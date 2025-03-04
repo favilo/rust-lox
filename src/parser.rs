@@ -30,8 +30,8 @@ impl Expr {
         match self {
             Self::Literal(l) => Ok(l.clone()),
             Self::Group(e) => e.evaluate(),
+            Self::Unary(u) => u.evaluate(),
             _ => todo!(),
-            // Self::Unary(u) => u.evaluate(),
             // Self::Binary(b) => b.evaluate(),
         }
     }
@@ -229,6 +229,29 @@ impl Expr {
 pub enum Unary {
     Negate(Box<Expr>),
     Not(Box<Expr>),
+}
+
+impl Unary {
+    pub fn evaluate(&self) -> Result<Literal, Error<'_, Input<'_>>> {
+        match self {
+            Self::Negate(e) => match e.evaluate()? {
+                // Literal::Nil => Ok(Literal::Nil),
+                Literal::Number(n) => Ok(Literal::Number(-n)),
+                _ => todo!(),
+            },
+            Self::Not(e) => match e.evaluate()? {
+                Literal::Nil => Ok(Literal::True),
+                Literal::True => Ok(Literal::False),
+                Literal::False => Ok(Literal::True),
+                Literal::Number(n) => Ok(if n == 0.0 {
+                    Literal::True
+                } else {
+                    Literal::False
+                }),
+                _ => todo!(),
+            },
+        }
+    }
 }
 
 impl std::fmt::Display for Unary {
