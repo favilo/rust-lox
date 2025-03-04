@@ -1,15 +1,21 @@
 use std::hash::Hash;
 use winnow::{
-    ascii::{digit1, multispace0, Caseless},
+    ascii::{digit1, Caseless},
     combinator::{alt, cut_err, delimited, empty, fail, opt, preceded, repeat, terminated, trace},
     dispatch,
-    error::ParserError,
+    error::{ErrMode, ParserError},
     stream::{AsBStr, AsChar, Compare, ParseSlice, Stream, StreamIsPartial},
     token::{any, one_of, take_till},
     LocatingSlice, ModalResult, Parser,
 };
 
-use crate::error;
+use self::state::{State, Stateful};
+
+pub(crate) mod state;
+
+use crate::error::{Error, ParseError};
+
+pub(crate) type Input<'s> = Stateful<LocatingSlice<&'s str>>;
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Expr {
@@ -31,53 +37,36 @@ impl std::fmt::Display for Expr {
 }
 
 impl Expr {
-    pub fn parser<S, E>(input: &mut S) -> ModalResult<Self, E>
-    where
-        for<'a> S: Stream
-            + StreamIsPartial
-            + Compare<&'a str>
-            + Compare<Caseless<&'a str>>
-            + AsBStr
-            + Compare<char>,
-        S::Slice: Eq + Hash + AsBStr + ParseSlice<f64> + Clone,
-        S::Token: AsChar + Clone,
-        S::IterOffsets: Clone,
-        E: ParserError<S>,
-    {
+    pub fn parser<'s>(input: &mut Input<'s>) -> ModalResult<Self, Error<'s, Input<'s>>> {
         trace(
             "expr",
             delimited(
-                multispace0,
+                tracking_multispace,
                 alt((
                     // Binary::parser.map(Self::Binary),
                     Expr::equality,
                 )),
-                multispace0,
+                tracking_multispace,
             ),
         )
         .parse_next(input)
     }
 
-    pub fn equality<S, E>(input: &mut S) -> ModalResult<Expr, E>
-    where
-        for<'a> S: Stream
-            + StreamIsPartial
-            + Compare<&'a str>
-            + Compare<Caseless<&'a str>>
-            + AsBStr
-            + Compare<char>,
-        S::Slice: Eq + Hash + AsBStr + ParseSlice<f64> + Clone,
-        S::Token: AsChar + Clone,
-        S::IterOffsets: Clone,
-        E: ParserError<S>,
-    {
+    pub fn equality<'s>(input: &mut Input<'s>) -> ModalResult<Expr, Error<'s, Input<'s>>> {
         let init = trace("First comparison", Expr::comparison).parse_next(input)?;
 
         trace(
             "rest of equality",
-            repeat(0.., (alt(("==", "!=")), Expr::comparison)).fold(
+            repeat(
+                0..,
+                (
+                    alt(("==", "!=")),
+                    alt((Expr::comparison, parse_error("Expect expression."))),
+                ),
+            )
+            .fold(
                 move || init.clone(),
-                |acc, (op, val): (S::Slice, Expr)| match op.as_bstr() {
+                |acc, (op, val): (<Input as Stream>::Slice, Expr)| match op.as_bstr() {
                     b"==" => Expr::Binary(Binary::Equals(Box::new(acc), Box::new(val))),
                     b"!=" => Expr::Binary(Binary::NotEquals(Box::new(acc), Box::new(val))),
                     _ => unreachable!(),
@@ -87,26 +76,21 @@ impl Expr {
         .parse_next(input)
     }
 
-    pub fn comparison<S, E>(input: &mut S) -> ModalResult<Expr, E>
-    where
-        for<'a> S: Stream
-            + StreamIsPartial
-            + Compare<&'a str>
-            + Compare<Caseless<&'a str>>
-            + AsBStr
-            + Compare<char>,
-        S::Slice: Eq + Hash + AsBStr + ParseSlice<f64> + Clone,
-        S::Token: AsChar + Clone,
-        S::IterOffsets: Clone,
-        E: ParserError<S>,
-    {
+    pub fn comparison<'s>(input: &mut Input<'s>) -> ModalResult<Expr, Error<'s, Input<'s>>> {
         let init = trace("First term", Expr::term).parse_next(input)?;
 
         trace(
             "rest of comparison",
-            repeat(0.., (alt(("<=", ">=", "<", ">")), Expr::term)).fold(
+            repeat(
+                0..,
+                (
+                    alt(("<=", ">=", "<", ">")),
+                    alt((Expr::term, parse_error("Expect expression."))),
+                ),
+            )
+            .fold(
                 move || init.clone(),
-                |acc, (op, val): (S::Slice, Expr)| match op.as_bstr() {
+                |acc, (op, val): (<Input as Stream>::Slice, Expr)| match op.as_bstr() {
                     b"<=" => Expr::Binary(Binary::LessEq(Box::new(acc), Box::new(val))),
                     b">=" => Expr::Binary(Binary::GreaterEq(Box::new(acc), Box::new(val))),
                     b"<" => Expr::Binary(Binary::LessThan(Box::new(acc), Box::new(val))),
@@ -118,26 +102,21 @@ impl Expr {
         .parse_next(input)
     }
 
-    pub fn term<S, E>(input: &mut S) -> ModalResult<Expr, E>
-    where
-        for<'a> S: Stream
-            + StreamIsPartial
-            + Compare<&'a str>
-            + Compare<Caseless<&'a str>>
-            + AsBStr
-            + Compare<char>,
-        S::Slice: Eq + Hash + AsBStr + ParseSlice<f64> + Clone,
-        S::Token: AsChar + Clone,
-        S::IterOffsets: Clone,
-        E: ParserError<S>,
-    {
+    pub fn term<'s>(input: &mut Input<'s>) -> ModalResult<Expr, Error<'s, Input<'s>>> {
         let init = trace("First factor", Expr::factor).parse_next(input)?;
 
         trace(
             "rest of term",
-            repeat(0.., (one_of(['+', '-']), Expr::factor)).fold(
+            repeat(
+                0..,
+                (
+                    one_of(['+', '-']),
+                    alt((Expr::factor, parse_error("Expect expression."))),
+                ),
+            )
+            .fold(
                 move || init.clone(),
-                |acc, (op, val): (S::Token, Expr)| match op.as_char() {
+                |acc, (op, val): (<Input as Stream>::Token, Expr)| match op.as_char() {
                     '+' => Expr::Binary(Binary::Add(Box::new(acc), Box::new(val))),
                     '-' => Expr::Binary(Binary::Sub(Box::new(acc), Box::new(val))),
                     _ => unreachable!(),
@@ -147,26 +126,21 @@ impl Expr {
         .parse_next(input)
     }
 
-    pub fn factor<S, E>(input: &mut S) -> ModalResult<Expr, E>
-    where
-        for<'a> S: Stream
-            + StreamIsPartial
-            + Compare<&'a str>
-            + Compare<Caseless<&'a str>>
-            + AsBStr
-            + Compare<char>,
-        S::Slice: Eq + Hash + AsBStr + ParseSlice<f64> + Clone,
-        S::Token: AsChar + Clone,
-        S::IterOffsets: Clone,
-        E: ParserError<S>,
-    {
+    pub fn factor<'s>(input: &mut Input<'s>) -> ModalResult<Expr, Error<'s, Input<'s>>> {
         let init = trace("First unary", Expr::unary).parse_next(input)?;
 
         trace(
             "rest of factor",
-            repeat(0.., (one_of(['*', '/']), Expr::unary)).fold(
+            repeat(
+                0..,
+                (
+                    one_of(['*', '/']),
+                    alt((Expr::unary, parse_error("Expect expression."))),
+                ),
+            )
+            .fold(
                 move || init.clone(),
-                |acc, (op, val): (S::Token, Expr)| match op.as_char() {
+                |acc, (op, val): (<Input as Stream>::Token, Expr)| match op.as_char() {
                     '*' => Expr::Binary(Binary::Mul(Box::new(acc), Box::new(val))),
                     '/' => Expr::Binary(Binary::Div(Box::new(acc), Box::new(val))),
                     _ => unreachable!(),
@@ -176,19 +150,7 @@ impl Expr {
         .parse_next(input)
     }
 
-    pub fn unary<S, E>(input: &mut S) -> ModalResult<Expr, E>
-    where
-        for<'a> S: Stream
-            + StreamIsPartial
-            + Compare<&'a str>
-            + Compare<Caseless<&'a str>>
-            + AsBStr
-            + Compare<char>,
-        S::Slice: Eq + Hash + AsBStr + ParseSlice<f64> + Clone,
-        S::Token: AsChar + Clone,
-        S::IterOffsets: Clone,
-        E: ParserError<S>,
-    {
+    pub fn unary<'s>(input: &mut Input<'s>) -> ModalResult<Expr, Error<'s, Input<'s>>> {
         #[derive(Debug, Clone, Copy)]
         enum Sign {
             Negate,
@@ -208,8 +170,8 @@ impl Expr {
             trace(
                 "unary",
                 (
-                    delimited(multispace0, operator, multispace0),
-                    terminated(Expr::unary, multispace0),
+                    delimited(tracking_multispace, operator, tracking_multispace),
+                    terminated(Expr::unary, tracking_multispace),
                 )
                     .map(|(neg, e)| match neg {
                         Sign::Negate => Expr::Unary(Unary::Negate(Box::new(e))),
@@ -221,48 +183,28 @@ impl Expr {
         .parse_next(input)
     }
 
-    pub fn primary<S, E>(input: &mut S) -> ModalResult<Self, E>
-    where
-        for<'a> S: Stream
-            + StreamIsPartial
-            + Compare<&'a str>
-            + Compare<Caseless<&'a str>>
-            + AsBStr
-            + Compare<char>,
-        S::Slice: Eq + Hash + AsBStr + ParseSlice<f64> + Clone,
-        S::Token: AsChar + Clone,
-        S::IterOffsets: Clone,
-        E: ParserError<S>,
-    {
+    pub fn primary<'s>(input: &mut Input<'s>) -> ModalResult<Self, Error<'s, Input<'s>>> {
         trace(
             "primary",
             delimited(
-                multispace0,
-                alt((Expr::parenthesis, Literal::literal.map(Expr::Literal))),
-                multispace0,
+                tracking_multispace,
+                alt((Expr::parenthesis, Literal::parser.map(Expr::Literal))),
+                tracking_multispace,
             ),
         )
         .parse_next(input)
     }
 
-    fn parenthesis<S, E>(input: &mut S) -> ModalResult<Self, E>
-    where
-        for<'a> S: Stream
-            + StreamIsPartial
-            + Compare<&'a str>
-            + Compare<Caseless<&'a str>>
-            + AsBStr
-            + Compare<char>,
-        S::Slice: Eq + Hash + AsBStr + ParseSlice<f64> + Clone,
-        S::Token: AsChar + Clone,
-        S::IterOffsets: Clone,
-        E: ParserError<S>,
-    {
+    fn parenthesis<'s>(input: &mut Input<'s>) -> ModalResult<Self, Error<'s, Input<'s>>> {
         trace(
             "parenthesis",
             preceded(
                 "(",
-                cut_err(delimited(multispace0, Self::parser, (multispace0, ")"))),
+                delimited(
+                    tracking_multispace,
+                    terminated(Self::parser, tracking_multispace),
+                    alt((")", parse_error("Expect expression."))),
+                ),
             ),
         )
         .map(|e| Self::Group(Box::new(e)))
@@ -326,23 +268,11 @@ pub enum Literal {
 }
 
 impl Literal {
-    pub fn literal<S, E>(input: &mut S) -> ModalResult<Self, E>
-    where
-        for<'a> S: Stream
-            + StreamIsPartial
-            + Compare<&'a str>
-            + Compare<Caseless<&'a str>>
-            + AsBStr
-            + Compare<char>,
-        S::Slice: Eq + Hash + AsBStr + ParseSlice<f64> + Clone,
-        S::Token: AsChar + Clone,
-        S::IterOffsets: Clone,
-        E: ParserError<S>,
-    {
+    pub fn parser<'s>(input: &mut Input<'s>) -> ModalResult<Self, Error<'s, Input<'s>>> {
         trace(
             "literal",
             delimited(
-                multispace0,
+                tracking_multispace,
                 alt((
                     "true".value(Self::True),
                     "false".value(Self::False),
@@ -350,7 +280,7 @@ impl Literal {
                     Self::number,
                     Self::string,
                 )),
-                multispace0,
+                tracking_multispace,
             ),
         )
         .parse_next(input)
@@ -421,12 +351,40 @@ impl std::fmt::Display for Literal {
     }
 }
 
-pub fn parse(input: &str) -> Result<Expr, error::Error> {
-    let expr = Expr::parser::<_, winnow::error::TreeError<_>>
-        .parse(LocatingSlice::new(input))
-        .map_err(|e| error::Error::ParseError(format!("{e}")))?;
+fn tracking_new_line<'s>(input: &mut Input<'s>) -> ModalResult<(), Error<'s, Input<'s>>>
+where
+    for<'a> Input<'a>: Stream<Token = char>,
+{
+    trace(format!("tracking_new_line: {}", input.state.line()), '\n').parse_next(input)?;
+    input.state.inc_line();
+    Ok(())
+}
 
-    Ok(expr)
+fn tracking_multispace<'s>(input: &mut Input<'s>) -> ModalResult<(), Error<'s, Input<'s>>> {
+    trace(
+        "tracking_multispace",
+        repeat::<_, _, (), _, _>(
+            0..,
+            alt((one_of([' ', '\t', '\r']).void(), tracking_new_line)),
+        ),
+    )
+    .parse_next(input)
+}
+
+pub fn parse_error<'s, Output>(
+    msg: &'static str,
+) -> impl Parser<Input<'s>, Output, ErrMode<Error<'s, Input<'s>>>> {
+    trace("parse_error", move |input: &mut Input<'s>| {
+        tracking_multispace.parse_next(input)?;
+        Err(ErrMode::Cut(Error::Parse(ParseError::new(
+            msg.to_string(),
+            *input,
+        ))))
+    })
+}
+
+pub fn parse(input: &str) -> Result<Expr, Error<'_, Input<'_>>> {
+    Ok(Expr::parser.parse(Stateful::new(LocatingSlice::new(input), State::new(1)))?)
 }
 
 #[cfg(test)]
@@ -553,6 +511,20 @@ mod tests {
         let input = "83 < 99 < 115";
         let res = parse(input)?;
         assert_eq!(res.to_string(), "(< (< 83.0 99.0) 115.0)");
+        Ok(())
+    }
+
+    #[test]
+    fn test_parse_error() -> anyhow::Result<()> {
+        let input = "(
+            72 +
+            )";
+        let res = parse(input);
+        assert!(res.is_err());
+        assert_eq!(
+            res.unwrap_err().to_string(),
+            "[line 3] Error at ')': Expect expression."
+        );
         Ok(())
     }
 }

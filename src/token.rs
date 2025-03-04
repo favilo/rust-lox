@@ -10,7 +10,7 @@ use winnow::{
     LocatingSlice, ModalResult, Parser,
 };
 
-use crate::error::Error;
+use crate::error::{self, Error};
 
 /// Token represents a single token in the input.
 #[derive(Debug, Clone, PartialEq)]
@@ -277,7 +277,7 @@ impl fmt::Display for Token {
     }
 }
 
-pub fn tokenize(input: &str) -> Result<(), crate::error::Error> {
+pub fn tokenize(input: &str) -> Result<(), error::Error<LocatingSlice<&str>>> {
     let mut input = LocatingSlice::new(input);
     let mut line = 1;
     let mut errors = false;
@@ -322,7 +322,7 @@ pub fn tokenize(input: &str) -> Result<(), crate::error::Error> {
     println!("{}", Token::Eof);
 
     if errors {
-        Err(Error::TokenizeError("Tokenization failed".into()))
+        Err(Error::Tokenize("Tokenization failed".into()))
     } else {
         Ok(())
     }
