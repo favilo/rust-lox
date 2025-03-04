@@ -316,19 +316,35 @@ impl Evaluate for Binary {
             }),
             Self::LessThan(l, r) => Ok(match (l.evaluate()?, r.evaluate()?) {
                 (Literal::Number(l), Literal::Number(r)) => Literal::from(l < r),
-                _ => todo!(),
+                _ => {
+                    return Err(Error::from(EvaluateError::TypeMismatch {
+                        expected: "numbers".into(),
+                    }))
+                }
             }),
             Self::GreaterThan(l, r) => Ok(match (l.evaluate()?, r.evaluate()?) {
                 (Literal::Number(l), Literal::Number(r)) => Literal::from(l > r),
-                _ => todo!(),
+                _ => {
+                    return Err(Error::from(EvaluateError::TypeMismatch {
+                        expected: "numbers".into(),
+                    }))
+                }
             }),
             Self::LessEq(l, r) => Ok(match (l.evaluate()?, r.evaluate()?) {
                 (Literal::Number(l), Literal::Number(r)) => Literal::from(l <= r),
-                _ => todo!(),
+                _ => {
+                    return Err(Error::from(EvaluateError::TypeMismatch {
+                        expected: "numbers".into(),
+                    }))
+                }
             }),
             Self::GreaterEq(l, r) => Ok(match (l.evaluate()?, r.evaluate()?) {
                 (Literal::Number(l), Literal::Number(r)) => Literal::from(l >= r),
-                _ => todo!(),
+                _ => {
+                    return Err(Error::from(EvaluateError::TypeMismatch {
+                        expected: "numbers".into(),
+                    }))
+                }
             }),
             Self::Equals(l, r) => Ok(match (l.evaluate()?, r.evaluate()?) {
                 (Literal::Number(l), Literal::Number(r)) => Literal::from(l == r),
