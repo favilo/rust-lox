@@ -285,7 +285,7 @@ impl Evaluate for Binary {
                 (Literal::Number(l), Literal::Number(r)) => Literal::from(l * r),
                 _ => {
                     return Err(Error::from(EvaluateError::TypeMismatch {
-                        expected: "number".into(),
+                        expected: "numbers".into(),
                     }))
                 }
             }),
@@ -293,7 +293,7 @@ impl Evaluate for Binary {
                 (Literal::Number(l), Literal::Number(r)) => Literal::from(l / r),
                 _ => {
                     return Err(Error::from(EvaluateError::TypeMismatch {
-                        expected: "number".into(),
+                        expected: "numbers".into(),
                     }))
                 }
             }),
@@ -302,7 +302,7 @@ impl Evaluate for Binary {
                 (Literal::String(s), Literal::String(t)) => Literal::from(format!("{}{}", s, t)),
                 _ => {
                     return Err(Error::from(EvaluateError::TypeMismatch {
-                        expected: "number or string".into(),
+                        expected: "two numbers or two strings".into(),
                     }))
                 }
             }),
@@ -310,7 +310,7 @@ impl Evaluate for Binary {
                 (Literal::Number(l), Literal::Number(r)) => Literal::from(l - r),
                 _ => {
                     return Err(Error::from(EvaluateError::TypeMismatch {
-                        expected: "number".into(),
+                        expected: "numbers".into(),
                     }))
                 }
             }),
