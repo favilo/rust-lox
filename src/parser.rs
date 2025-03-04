@@ -278,20 +278,36 @@ impl Evaluate for Binary {
     fn evaluate(&self) -> Result<Literal, Error<'_, Input<'_>>> {
         match self {
             Self::Mul(l, r) => Ok(match (l.evaluate()?, r.evaluate()?) {
-                (Literal::Number(l), Literal::Number(r)) => Literal::Number(l * r),
+                (Literal::Number(l), Literal::Number(r)) => Literal::from(l * r),
                 _ => todo!(),
             }),
             Self::Div(l, r) => Ok(match (l.evaluate()?, r.evaluate()?) {
-                (Literal::Number(l), Literal::Number(r)) => Literal::Number(l / r),
+                (Literal::Number(l), Literal::Number(r)) => Literal::from(l / r),
                 _ => todo!(),
             }),
             Self::Add(l, r) => Ok(match (l.evaluate()?, r.evaluate()?) {
-                (Literal::Number(l), Literal::Number(r)) => Literal::Number(l + r),
-                (Literal::String(s), Literal::String(t)) => Literal::String(format!("{}{}", s, t)),
+                (Literal::Number(l), Literal::Number(r)) => Literal::from(l + r),
+                (Literal::String(s), Literal::String(t)) => Literal::from(format!("{}{}", s, t)),
                 _ => todo!(),
             }),
             Self::Sub(l, r) => Ok(match (l.evaluate()?, r.evaluate()?) {
-                (Literal::Number(l), Literal::Number(r)) => Literal::Number(l - r),
+                (Literal::Number(l), Literal::Number(r)) => Literal::from(l - r),
+                _ => todo!(),
+            }),
+            Self::LessThan(l, r) => Ok(match (l.evaluate()?, r.evaluate()?) {
+                (Literal::Number(l), Literal::Number(r)) => Literal::from(l < r),
+                _ => todo!(),
+            }),
+            Self::GreaterThan(l, r) => Ok(match (l.evaluate()?, r.evaluate()?) {
+                (Literal::Number(l), Literal::Number(r)) => Literal::from(l > r),
+                _ => todo!(),
+            }),
+            Self::LessEq(l, r) => Ok(match (l.evaluate()?, r.evaluate()?) {
+                (Literal::Number(l), Literal::Number(r)) => Literal::from(l <= r),
+                _ => todo!(),
+            }),
+            Self::GreaterEq(l, r) => Ok(match (l.evaluate()?, r.evaluate()?) {
+                (Literal::Number(l), Literal::Number(r)) => Literal::from(l >= r),
                 _ => todo!(),
             }),
             _ => todo!(),
@@ -323,6 +339,40 @@ pub enum Literal {
     Nil,
     Number(f64),
     String(String),
+}
+
+impl From<bool> for Literal {
+    fn from(b: bool) -> Self {
+        if b {
+            Self::True
+        } else {
+            Self::False
+        }
+    }
+}
+
+impl From<f64> for Literal {
+    fn from(n: f64) -> Self {
+        Self::Number(n)
+    }
+}
+
+impl From<&str> for Literal {
+    fn from(s: &str) -> Self {
+        Self::String(s.to_string())
+    }
+}
+
+impl From<String> for Literal {
+    fn from(s: String) -> Self {
+        Self::String(s)
+    }
+}
+
+impl From<usize> for Literal {
+    fn from(n: usize) -> Self {
+        Self::Number(n as f64)
+    }
 }
 
 impl Literal {
