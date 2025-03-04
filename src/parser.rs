@@ -234,22 +234,17 @@ pub enum Unary {
 impl Unary {
     pub fn evaluate(&self) -> Result<Literal, Error<'_, Input<'_>>> {
         match self {
-            Self::Negate(e) => match e.evaluate()? {
-                // Literal::Nil => Ok(Literal::Nil),
-                Literal::Number(n) => Ok(Literal::Number(-n)),
+            Self::Negate(e) => Ok(match e.evaluate()? {
+                Literal::Number(n) => Literal::Number(-n),
                 _ => todo!(),
-            },
-            Self::Not(e) => match e.evaluate()? {
-                Literal::Nil => Ok(Literal::True),
-                Literal::True => Ok(Literal::False),
-                Literal::False => Ok(Literal::True),
-                Literal::Number(n) => Ok(if n == 0.0 {
-                    Literal::True
-                } else {
-                    Literal::False
-                }),
+            }),
+            Self::Not(e) => Ok(match e.evaluate()? {
+                Literal::Nil => Literal::True,
+                Literal::True => Literal::False,
+                Literal::False => Literal::True,
+                Literal::Number(_) => Literal::False,
                 _ => todo!(),
-            },
+            }),
         }
     }
 }
