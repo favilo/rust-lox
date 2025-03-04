@@ -310,7 +310,22 @@ impl Evaluate for Binary {
                 (Literal::Number(l), Literal::Number(r)) => Literal::from(l >= r),
                 _ => todo!(),
             }),
-            _ => todo!(),
+            Self::Equals(l, r) => Ok(match (l.evaluate()?, r.evaluate()?) {
+                (Literal::Number(l), Literal::Number(r)) => Literal::from(l == r),
+                (Literal::String(s), Literal::String(t)) => Literal::from(s == t),
+                (Literal::Nil, Literal::Nil) => Literal::True,
+                (Literal::True, Literal::True) => Literal::True,
+                (Literal::False, Literal::False) => Literal::True,
+                _ => Literal::False,
+            }),
+            Self::NotEquals(l, r) => Ok(match (l.evaluate()?, r.evaluate()?) {
+                (Literal::Number(l), Literal::Number(r)) => Literal::from(l != r),
+                (Literal::String(s), Literal::String(t)) => Literal::from(s != t),
+                (Literal::Nil, Literal::Nil) => Literal::False,
+                (Literal::True, Literal::True) => Literal::False,
+                (Literal::False, Literal::False) => Literal::False,
+                _ => Literal::True,
+            }),
         }
     }
 }
