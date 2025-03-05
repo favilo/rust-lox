@@ -39,7 +39,11 @@ impl Environment {
             .split_last_mut()
             .expect("always have one environment");
 
-        let found = rest.iter_mut().rev().find(|env| env.contains_key(name));
+        let found = if last.contains_key(name) {
+            None
+        } else {
+            rest.iter_mut().rev().find(|env| env.contains_key(name))
+        };
         let env = found.unwrap_or(last);
         env.insert(name.to_string(), value);
     }

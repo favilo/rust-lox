@@ -28,6 +28,7 @@ pub enum Statement {
     Block(Vec<Statement>),
     If(Expr, Box<Statement>, Option<Box<Statement>>),
     While(Expr, Box<Statement>),
+    For(Option<Box<Statement>>, Expr, Option<Expr>, Box<Statement>),
 }
 
 impl Evaluate for Ast {
@@ -64,11 +65,14 @@ impl Evaluate for Statement {
             Statement::Var(name, expr) => {
                 let value = expr.evaluate(env)?;
                 env.define(name, value.clone());
+                log::debug!("define: {} = {:?}", name, value);
+                log::debug!("environment: {:?}", env);
                 Ok(value)
             }
             Statement::Block(statements) => {
                 let mut last = Literal::Nil;
                 let mut block_state = env.child_view();
+                log::debug!("block environment: {:?}", block_state);
                 for statement in statements {
                     last = statement.evaluate(&mut block_state)?;
                 }
@@ -88,6 +92,24 @@ impl Evaluate for Statement {
                 let mut last = Literal::Nil;
                 while bool::from(condition.evaluate(env)?) {
                     last = stmt.evaluate(env)?;
+                }
+                Ok(last)
+            }
+            Statement::For(init, condition, increment, body) => {
+                let mut for_env = env.child_view();
+                let mut last = Literal::Nil;
+                if let Some(init) = init {
+                    log::debug!("init: {:?}", init);
+                    init.evaluate(&mut for_env)?;
+                    log::debug!("init environment: {:?}", for_env);
+                }
+                while bool::from(condition.evaluate(&mut for_env)?) {
+                    last = body.evaluate(&mut for_env)?;
+                    log::debug!("after loop environment: {:?}", for_env);
+                    if let Some(increment) = increment {
+                        increment.evaluate(&mut for_env)?;
+                    }
+                    log::debug!("increment environment: {:?}", for_env);
                 }
                 Ok(last)
             }
@@ -118,35 +140,42 @@ impl Statement {
     }
 
     fn declaration<'s>(input: &mut Input<'s>) -> ModalResult<Statement, Error<'s, Input<'s>>> {
-        alt((
-            terminated(
-                Self::var,
-                (
-                    tracking_multispace,
-                    alt((";", parse_error("Expect ';'"))),
-                    tracking_multispace,
-                ),
-            ),
-            Self::stmt,
-        ))
-        .parse_next(input)
+        alt((Self::var, Self::stmt)).parse_next(input)
     }
 
     fn stmt<'s>(input: &mut Input<'s>) -> ModalResult<Statement, Error<'s, Input<'s>>> {
-        alt((
-            terminated(
-                alt((Self::block, Self::condition, Self::while_loop)),
-                tracking_multispace,
-            ),
-            terminated(
-                alt((Self::print, Expr::parser.map(Statement::Expr))),
-                (
-                    tracking_multispace,
-                    alt((";", parse_error("Expect ';'"))),
-                    tracking_multispace,
-                ),
-            ),
-        ))
+        terminated(
+            alt((
+                Self::block,
+                Self::condition,
+                Self::while_loop,
+                Self::for_loop,
+                Self::print,
+                Self::expr_stmt,
+            )),
+            tracking_multispace,
+        )
+        .parse_next(input)
+    }
+
+    fn for_loop<'s>(input: &mut Input<'s>) -> ModalResult<Statement, Error<'s, Input<'s>>> {
+        seq! {
+            _: ("for", tracking_multispace, alt(("(", parse_error("Expect '('"))), tracking_multispace),
+            alt((alt((Self::var , Self::expr_stmt)).map(Some), (tracking_multispace, ";", tracking_multispace).map(|_|None))),
+            opt(Expr::parser),
+            _: (tracking_multispace, ";", tracking_multispace),
+            opt(Expr::parser),
+            _: (tracking_multispace, alt((")", parse_error("Expect ')'"))), tracking_multispace),
+            Self::stmt,
+        }
+        .map(|(init, condition, increment, body): (Option<Statement>, Option<Expr>, Option<Expr>, Statement)| {
+            Statement::For(
+                init.map(Box::new),
+                condition.unwrap_or(Expr::Literal(Literal::from(true))),
+                increment,
+                Box::new(body),
+            )
+        })
         .parse_next(input)
     }
 
@@ -190,18 +219,46 @@ impl Statement {
         }
         .parse_next(input)?;
 
-        if var.is_some() {
-            let expr = alt((Expr::parser, parse_error("Expect expression"))).parse_next(input)?;
-            Ok(Statement::Var(id, expr))
+        let var = if var.is_some() {
+            let (expr,) = seq! {
+                alt((Expr::parser, parse_error("Expect expression"))),
+            }
+            .parse_next(input)?;
+            Statement::Var(id, expr)
         } else {
-            Ok(Statement::Var(id, Expr::Literal(Literal::Nil)))
-        }
+            Statement::Var(id, Expr::Literal(Literal::Nil))
+        };
+        (
+            tracking_multispace,
+            alt((";", parse_error("Expect ';'"))),
+            tracking_multispace,
+        )
+            .void()
+            .parse_next(input)?;
+        Ok(var)
+    }
+
+    fn expr_stmt<'s>(input: &mut Input<'s>) -> ModalResult<Statement, Error<'s, Input<'s>>> {
+        terminated(
+            Expr::parser.map(Statement::Expr),
+            (
+                tracking_multispace,
+                alt((";", parse_error("Expect ';'"))),
+                tracking_multispace,
+            ),
+        )
+        .parse_next(input)
     }
 
     fn print<'s>(input: &mut Input<'s>) -> ModalResult<Statement, Error<'s, Input<'s>>> {
-        preceded(
+        delimited(
             terminated("print", tracking_multispace),
             alt((Expr::parser, parse_error("expect expression."))),
+            (
+                tracking_multispace,
+                alt((";", parse_error("Expect ';'"))),
+                tracking_multispace,
+            ),
         )
         .map(Statement::Print)
         .parse_next(input)
@@ -285,5 +342,21 @@ print true;
         let ast: Ast = parse(input).unwrap();
         let res = ast.evaluate(&mut view).unwrap();
         assert_eq!(res, Literal::Number(3.0));
+    }
+
+    #[test]
+    fn test_for_loop() {
+        let input = r#"
+            var a = 0;
+            for (var i = 0; i < 10; i = i + 1) {
+                a = a + i;
+            }
+            a;
+        "#;
+        let mut env = Environment::new();
+        let mut view = env.view();
+        let ast: Ast = parse(input).unwrap();
+        let res = ast.evaluate(&mut view).unwrap();
+        assert_eq!(res, Literal::Number(45.0));
     }
 }

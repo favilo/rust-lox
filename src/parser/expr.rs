@@ -626,19 +626,22 @@ impl Literal {
     pub(crate) fn identifier<'s>(
         input: &mut Input<'s>,
     ) -> ModalResult<String, Error<'s, Input<'s>>> {
-        let id = (
-            any.verify(|c: &<Input as Stream>::Token| {
-                let c = c.as_char();
-                c.is_alphabetic() || c == '_'
-            }),
-            take_while(0.., |c: <Input as Stream>::Token| {
-                let c = c.as_char();
-                c.is_alphanumeric() || c == '_'
-            }),
+        let id = trace(
+            "identifier",
+            (
+                any.verify(|c: &<Input as Stream>::Token| {
+                    let c = c.as_char();
+                    c.is_alphabetic() || c == '_'
+                }),
+                take_while(0.., |c: <Input as Stream>::Token| {
+                    let c = c.as_char();
+                    c.is_alphanumeric() || c == '_'
+                }),
+            ),
         )
-            .take()
-            .map(ToString::to_string)
-            .parse_next(input)?;
+        .take()
+        .map(ToString::to_string)
+        .parse_next(input)?;
         if matches!(
             id.as_ref(),
             "and"
