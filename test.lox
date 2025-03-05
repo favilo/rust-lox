@@ -1,3 +1,4 @@
 // comments
 var foo;
+foo = 32;
 print foo;

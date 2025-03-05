@@ -4,6 +4,7 @@ use winnow::{
     combinator::{alt, cut_err, delimited, empty, fail, opt, preceded, repeat, terminated, trace},
     dispatch,
     error::{ErrMode, ParserError},
+    seq,
     stream::{AsBStr, AsChar, Compare, ParseSlice, Stream, StreamIsPartial},
     token::{any, one_of, take_till, take_while},
     LocatingSlice, ModalResult, Parser,
@@ -23,6 +24,7 @@ pub enum Expr {
     Group(Box<Expr>),
     Unary(Unary),
     Binary(Binary),
+    Assignment(String, Box<Expr>),
 }
 
 impl Evaluate for Expr {
@@ -32,6 +34,11 @@ impl Evaluate for Expr {
             Self::Group(e) => e.evaluate(state),
             Self::Unary(u) => u.evaluate(state),
             Self::Binary(b) => b.evaluate(state),
+            Self::Assignment(id, e) => {
+                let value = e.evaluate(state)?;
+                state.set(id, value.clone());
+                Ok(value)
+            }
         }
     }
 }
@@ -44,6 +51,7 @@ impl std::fmt::Display for Expr {
             Self::Unary(u) => write!(f, "{}", u),
             Self::Binary(b) => write!(f, "{}", b),
             Self::Group(e) => write!(f, "(group {})", e),
+            Self::Assignment(id, e) => write!(f, "(= {} {})", id, e),
         }
     }
 }
@@ -54,14 +62,16 @@ impl Expr {
             "expr",
             delimited(
                 tracking_multispace,
-                alt((
-                    // Binary::parser.map(Self::Binary),
-                    Expr::equality,
-                )),
+                alt((Expr::assignment, Expr::equality)),
                 tracking_multispace,
             ),
         )
         .parse_next(input)
+    }
+
+    pub fn assignment<'s>(input: &mut Input<'s>) -> ModalResult<Expr, Error<'s, Input<'s>>> {
+        seq!(Literal::identifier, _: tracking_multispace, _: "=", _: tracking_multispace, Expr::parser)
+                        .map(|(id, e)| Expr::Assignment(id, Box::new(e))).parse_next(input)
     }
 
     pub fn equality<'s>(input: &mut Input<'s>) -> ModalResult<Expr, Error<'s, Input<'s>>> {
@@ -534,7 +544,9 @@ impl Literal {
                 | "var"
                 | "while"
         ) {
-            Err(ErrMode::Cut(Error::from(EvaluateError::ReservedWord(id))))
+            Err(ErrMode::Backtrack(Error::from(
+                EvaluateError::ReservedWord(id),
+            )))
         } else {
             Ok(id)
         }

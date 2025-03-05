@@ -134,4 +134,18 @@ mod tests {
             "[line 1] Error at ';': expect expression."
         );
     }
+
+    #[test]
+    fn test_var() {
+        let input = r#"
+// This program tests statements that don't have any side effects
+19 - 93 >= -46 * 2 / 46 + 77;
+true == true;
+("hello" == "bar") == ("baz" != "world");
+print true;
+"#;
+        let ast = parse(input).unwrap();
+        let res = ast.run();
+        assert!(res.is_ok());
+    }
 }
