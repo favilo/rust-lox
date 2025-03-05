@@ -19,7 +19,7 @@ impl Environment {
     }
 
     pub fn get(&self, name: &str) -> Option<&Literal> {
-        self.environments.iter().find_map(|env| env.get(name))
+        self.environments.iter().rev().find_map(|env| env.get(name))
     }
 
     pub fn define(&mut self, name: &str, value: Literal) {
@@ -39,7 +39,7 @@ impl Environment {
             .split_last_mut()
             .expect("always have one environment");
 
-        let found = rest.iter_mut().find(|env| env.contains_key(name));
+        let found = rest.iter_mut().rev().find(|env| env.contains_key(name));
         let env = found.unwrap_or(last);
         env.insert(name.to_string(), value);
     }

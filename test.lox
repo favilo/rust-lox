@@ -1,8 +1,8 @@
-// comments
-var a = 1;
 {
-    var b = 2;
-    a = 5;
-    b = 3;
-    a + b;
+    var world = "before";
+    {
+        var world = "after";
+        print world;
+    }
+    print world;
 }
