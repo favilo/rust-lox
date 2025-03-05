@@ -139,6 +139,8 @@ impl<S: Stream + Clone, E: std::error::Error + Send + Sync + 'static> FromExtern
 #[derive(Debug)]
 pub enum EvaluateError {
     TypeMismatch { expected: String },
+    UndefinedVariable(String),
+    ReservedWord(String),
 }
 
 impl From<EvaluateError> for Error<'_, Input<'_>> {
@@ -151,6 +153,8 @@ impl Display for EvaluateError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::TypeMismatch { expected } => write!(f, "Operands must be {}", expected),
+            Self::UndefinedVariable(name) => write!(f, "Undefined variable: '{}'", name),
+            Self::ReservedWord(name) => write!(f, "Cannot assign to reserved word: '{}'", name),
         }
     }
 }

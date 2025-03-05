@@ -1,10 +1,11 @@
 use std::{fs, path::PathBuf};
 
-use ast::{Evaluate, Run};
 use clap::{Parser, Subcommand};
 
-mod ast;
+use crate::parser::{Evaluate, Run};
+
 mod error;
+mod interpreter;
 mod parser;
 mod token;
 
@@ -50,7 +51,7 @@ fn main() {
                 eprintln!("Failed to read file {}", filename.display());
                 String::new()
             });
-            let res = parser::parse(&file_contents);
+            let res = parser::expr::parse(&file_contents);
             let Ok(expr) = res else {
                 eprintln!("Failed to parse file {}", res.unwrap_err());
                 std::process::exit(65);
@@ -63,12 +64,13 @@ fn main() {
                 eprintln!("Failed to read file {}", filename.display());
                 String::new()
             });
-            let res = parser::parse(&file_contents);
+            let res = parser::expr::parse(&file_contents);
             let Ok(expr) = res else {
                 eprintln!("Failed to parse file {}", res.unwrap_err());
                 std::process::exit(65);
             };
-            let res = expr.evaluate();
+            let mut state = Default::default();
+            let res = expr.evaluate(&mut state);
             let Ok(result) = res else {
                 eprintln!("Failed to evaluate file {}", res.unwrap_err());
                 std::process::exit(70);
@@ -81,7 +83,7 @@ fn main() {
                 eprintln!("Failed to read file {}", filename.display());
                 String::new()
             });
-            let res = ast::parse(&file_contents);
+            let res = parser::ast::parse(&file_contents);
             let Ok(ast) = res else {
                 eprintln!("Failed to parse file {}", res.unwrap_err());
                 std::process::exit(65);

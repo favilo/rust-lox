@@ -1,2 +1,3 @@
 // comments
-print "foo world";
+var foo = 34;
+print foo;
