@@ -68,7 +68,7 @@ impl Expr {
             "expr",
             delimited(
                 tracking_multispace,
-                alt((Expr::assignment, Expr::equality)),
+                alt((Expr::assignment, Expr::logical_or)),
                 tracking_multispace,
             ),
         )
@@ -78,6 +78,50 @@ impl Expr {
     pub fn assignment<'s>(input: &mut Input<'s>) -> ModalResult<Expr, Error<'s, Input<'s>>> {
         seq!(Literal::identifier, _: tracking_multispace, _: "=", _: tracking_multispace, Expr::parser)
                         .map(|(id, e)| Expr::Assignment(id, Box::new(e))).parse_next(input)
+    }
+
+    pub fn logical_or<'s>(input: &mut Input<'s>) -> ModalResult<Expr, Error<'s, Input<'s>>> {
+        let init = trace("First comparison", Expr::logical_and).parse_next(input)?;
+
+        trace(
+            "rest of logical_or",
+            repeat(
+                0..,
+                (
+                    "or",
+                    alt((Expr::logical_and, parse_error("Expect expression."))),
+                ),
+            )
+            .fold(
+                move || init.clone(),
+                |acc, (_, val): (<Input as Stream>::Slice, Expr)| {
+                    Expr::Binary(Binary::Or(Box::new(acc), Box::new(val)))
+                },
+            ),
+        )
+        .parse_next(input)
+    }
+
+    pub fn logical_and<'s>(input: &mut Input<'s>) -> ModalResult<Expr, Error<'s, Input<'s>>> {
+        let init = trace("First comparison", Expr::equality).parse_next(input)?;
+
+        trace(
+            "rest of logical_and",
+            repeat(
+                0..,
+                (
+                    "and",
+                    alt((Expr::equality, parse_error("Expect expression."))),
+                ),
+            )
+            .fold(
+                move || init.clone(),
+                |acc, (_, val): (<Input as Stream>::Slice, Expr)| {
+                    Expr::Binary(Binary::Or(Box::new(acc), Box::new(val)))
+                },
+            ),
+        )
+        .parse_next(input)
     }
 
     pub fn equality<'s>(input: &mut Input<'s>) -> ModalResult<Expr, Error<'s, Input<'s>>> {
@@ -295,6 +339,7 @@ pub enum Binary {
     GreaterEq(Box<Expr>, Box<Expr>),
     Equals(Box<Expr>, Box<Expr>),
     NotEquals(Box<Expr>, Box<Expr>),
+    Or(Box<Expr>, Box<Expr>),
 }
 
 impl Evaluate for Binary {
@@ -387,6 +432,10 @@ impl Evaluate for Binary {
                 (Literal::False, Literal::False) => Literal::False,
                 _ => Literal::True,
             }),
+            Self::Or(l, r) => {
+                let a = l.evaluate(env)?;
+                Ok(if bool::from(&a) { a } else { r.evaluate(env)? })
+            }
         }
     }
 }
@@ -404,6 +453,7 @@ impl std::fmt::Display for Binary {
             Self::GreaterEq(l, r) => write!(f, "(>= {} {})", l, r),
             Self::Equals(l, r) => write!(f, "(== {} {})", l, r),
             Self::NotEquals(l, r) => write!(f, "(!= {} {})", l, r),
+            Self::Or(l, r) => write!(f, "(or {} {})", l, r),
         }
     }
 }
@@ -454,6 +504,15 @@ impl From<usize> for Literal {
 
 impl From<Literal> for bool {
     fn from(value: Literal) -> Self {
+        matches!(
+            value,
+            Literal::True | Literal::Number(_) | Literal::String(_)
+        )
+    }
+}
+
+impl From<&Literal> for bool {
+    fn from(value: &Literal) -> Self {
         matches!(
             value,
             Literal::True | Literal::Number(_) | Literal::String(_)
