@@ -12,7 +12,7 @@ use super::{
     expr::{Expr, Literal},
     parse_error,
     state::State,
-    tracking_multispace, Evaluate, Input, Run, Stateful,
+    whitespace, Evaluate, Input, Run, Stateful,
 };
 
 #[derive(Debug)]
@@ -136,7 +136,7 @@ impl Ast {
 
 impl Statement {
     fn parser<'s>(input: &mut Input<'s>) -> ModalResult<Self, Error<'s, Input<'s>>> {
-        delimited(tracking_multispace, Self::declaration, tracking_multispace).parse_next(input)
+        delimited(whitespace, Self::declaration, whitespace).parse_next(input)
     }
 
     fn declaration<'s>(input: &mut Input<'s>) -> ModalResult<Statement, Error<'s, Input<'s>>> {
@@ -153,19 +153,19 @@ impl Statement {
                 Self::print,
                 Self::expr_stmt,
             )),
-            tracking_multispace,
+            whitespace,
         )
         .parse_next(input)
     }
 
     fn for_loop<'s>(input: &mut Input<'s>) -> ModalResult<Statement, Error<'s, Input<'s>>> {
         seq! {
-            _: ("for", tracking_multispace, alt(("(", parse_error("Expect '('"))), tracking_multispace),
-            alt((alt((Self::var , Self::expr_stmt)).map(Some), (tracking_multispace, ";", tracking_multispace).map(|_|None))),
+            _: ("for", whitespace, alt(("(", parse_error("Expect '('"))), whitespace),
+            alt((alt((Self::var , Self::expr_stmt)).map(Some), (whitespace, ";", whitespace).map(|_|None))),
             opt(Expr::parser),
-            _: (tracking_multispace, ";", tracking_multispace),
+            _: (whitespace, ";", whitespace),
             opt(Expr::parser),
-            _: (tracking_multispace, alt((")", parse_error("Expect ')'"))), tracking_multispace),
+            _: (whitespace, alt((")", parse_error("Expect ')'"))), whitespace),
             Self::stmt,
         }
         .map(|(init, condition, increment, body): (Option<Statement>, Option<Expr>, Option<Expr>, Statement)| {
@@ -181,9 +181,9 @@ impl Statement {
 
     fn while_loop<'s>(input: &mut Input<'s>) -> ModalResult<Statement, Error<'s, Input<'s>>> {
         seq! {
-            _: ("while", tracking_multispace, alt(("(", parse_error("Expect '('"))), tracking_multispace),
+            _: ("while", whitespace, alt(("(", parse_error("Expect '('"))), whitespace),
             Expr::parser,
-            _: (tracking_multispace, alt((")", parse_error("Expect ')'"))), tracking_multispace),
+            _: (whitespace, alt((")", parse_error("Expect ')'"))), whitespace),
             Self::stmt,
         }
         .map(|(condition, stmt)| Statement::While(condition, Box::new(stmt)))
@@ -192,11 +192,11 @@ impl Statement {
 
     fn condition<'s>(input: &mut Input<'s>) -> ModalResult<Statement, Error<'s, Input<'s>>> {
         seq! {
-            _: ("if", tracking_multispace, alt(("(", parse_error("Expect '('"))), tracking_multispace),
+            _: ("if", whitespace, alt(("(", parse_error("Expect '('"))), whitespace),
             Expr::parser,
-            _: (tracking_multispace, alt((")", parse_error("Expect ')'"))), tracking_multispace),
+            _: (whitespace, alt((")", parse_error("Expect ')'"))), whitespace),
             Self::stmt,
-            opt(preceded((tracking_multispace, "else", tracking_multispace), Self::stmt)),
+            opt(preceded((whitespace, "else", whitespace), Self::stmt)),
         }
         .map(|(condition, true_s, false_s)| Statement::If(condition, Box::new(true_s), false_s.map(Box::new)))
         .parse_next(input)
@@ -206,16 +206,16 @@ impl Statement {
         delimited(
             "{",
             Ast::parser.map(|ast| Statement::Block(ast.statements)),
-            alt((("}", tracking_multispace), parse_error("Expect '}'"))),
+            alt((("}", whitespace), parse_error("Expect '}'"))),
         )
         .parse_next(input)
     }
 
     fn var<'s>(input: &mut Input<'s>) -> ModalResult<Statement, Error<'s, Input<'s>>> {
         let (id, var) = seq! {
-            _: terminated("var", tracking_multispace),
+            _: terminated("var", whitespace),
             alt((Literal::identifier, parse_error("expect identifier."))),
-            opt((tracking_multispace, "=", tracking_multispace).void()),
+            opt((whitespace, "=", whitespace).void()),
         }
         .parse_next(input)?;
 
@@ -229,9 +229,9 @@ impl Statement {
             Statement::Var(id, Expr::Literal(Literal::Nil))
         };
         (
-            tracking_multispace,
+            whitespace,
             alt((";", parse_error("Expect ';'"))),
-            tracking_multispace,
+            whitespace,
         )
             .void()
             .parse_next(input)?;
@@ -242,9 +242,9 @@ impl Statement {
         terminated(
             Expr::parser.map(Statement::Expr),
             (
-                tracking_multispace,
+                whitespace,
                 alt((";", parse_error("Expect ';'"))),
-                tracking_multispace,
+                whitespace,
             ),
         )
         .parse_next(input)
@@ -252,12 +252,12 @@ impl Statement {
 
     fn print<'s>(input: &mut Input<'s>) -> ModalResult<Statement, Error<'s, Input<'s>>> {
         delimited(
-            terminated("print", tracking_multispace),
+            terminated("print", whitespace),
             alt((Expr::parser, parse_error("expect expression."))),
             (
-                tracking_multispace,
+                whitespace,
                 alt((";", parse_error("Expect ';'"))),
-                tracking_multispace,
+                whitespace,
             ),
         )
         .map(Statement::Print)

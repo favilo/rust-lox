@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::{collections::HashMap, sync::Arc, time::UNIX_EPOCH};
 
 use crate::parser::expr::Literal;
 
@@ -9,8 +9,16 @@ pub struct Environment {
 
 impl Environment {
     pub fn new() -> Self {
+        let mut globals = HashMap::default();
+        globals.insert(
+            "clock".into(),
+            Literal::NativeCallable(
+                0,
+                Arc::new(|_| Literal::from(UNIX_EPOCH.elapsed().unwrap().as_secs_f64())),
+            ),
+        );
         Self {
-            environments: vec![HashMap::default()],
+            environments: vec![globals],
         }
     }
 

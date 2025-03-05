@@ -5,7 +5,7 @@ use winnow::{
     stream::Stream,
 };
 
-use crate::parser::Input;
+use crate::parser::{expr::Literal, Input};
 
 #[derive(Debug)]
 pub enum Error<'s, S: Stream> {
@@ -141,6 +141,8 @@ pub enum EvaluateError {
     TypeMismatch { expected: String },
     UndefinedVariable(String),
     ReservedWord(String),
+    ArgumentMismatch { expected: usize, got: usize },
+    NotCallable(Literal),
 }
 
 impl From<EvaluateError> for Error<'_, Input<'_>> {
@@ -152,9 +154,13 @@ impl From<EvaluateError> for Error<'_, Input<'_>> {
 impl Display for EvaluateError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::TypeMismatch { expected } => write!(f, "Operands must be {}", expected),
-            Self::UndefinedVariable(name) => write!(f, "Undefined variable: '{}'", name),
-            Self::ReservedWord(name) => write!(f, "Cannot assign to reserved word: '{}'", name),
+            Self::TypeMismatch { expected } => write!(f, "Operands must be {expected}"),
+            Self::UndefinedVariable(name) => write!(f, "Undefined variable: '{name}'"),
+            Self::ReservedWord(name) => write!(f, "Cannot assign to reserved word: '{name}'"),
+            Self::ArgumentMismatch { expected, got } => {
+                write!(f, "Agrument mismatch: expected {expected}, found {got}.")
+            }
+            Self::NotCallable(l) => write!(f, "Expected callable, found {l:?}."),
         }
     }
 }

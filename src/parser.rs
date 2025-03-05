@@ -57,7 +57,7 @@ where
     Ok(())
 }
 
-pub fn tracking_multispace<'s>(input: &mut Input<'s>) -> ModalResult<(), Error<'s, Input<'s>>> {
+pub fn whitespace<'s>(input: &mut Input<'s>) -> ModalResult<(), Error<'s, Input<'s>>> {
     trace(
         "tracking_multispace",
         repeat::<_, _, (), _, _>(
@@ -72,7 +72,7 @@ pub fn parse_error<'s, Output>(
     msg: &'static str,
 ) -> impl Parser<Input<'s>, Output, ErrMode<Error<'s, Input<'s>>>> {
     trace("parse_error", move |input: &mut Input<'s>| {
-        tracking_multispace.parse_next(input)?;
+        whitespace.parse_next(input)?;
         Err(ErrMode::Cut(Error::Parse(ParseError::new(
             msg.to_string(),
             *input,

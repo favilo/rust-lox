@@ -1,4 +1,4 @@
-use std::hash::Hash;
+use std::{hash::Hash, iter::once, sync::Arc};
 use winnow::{
     ascii::{digit1, Caseless},
     combinator::{alt, cut_err, delimited, empty, fail, opt, preceded, repeat, terminated, trace},
@@ -16,7 +16,7 @@ use crate::{
     parser::state::{State, Stateful},
 };
 
-use super::{parse_error, tracking_multispace, Evaluate, Input};
+use super::{parse_error, whitespace, Evaluate, Input};
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Expr {
@@ -25,6 +25,7 @@ pub enum Expr {
     Unary(Unary),
     Binary(Binary),
     Assignment(String, Box<Expr>),
+    FnCall(Box<Expr>, Vec<Expr>),
 }
 
 impl Evaluate for Expr {
@@ -45,6 +46,26 @@ impl Evaluate for Expr {
                 env.set(id, value.clone());
                 Ok(value)
             }
+            Self::FnCall(expr, args) => {
+                let args = args
+                    .iter()
+                    .map(|e| e.evaluate(env))
+                    .collect::<Result<Vec<_>, _>>()?;
+                let callable = expr.evaluate(env)?;
+                match callable {
+                    Literal::NativeCallable(n, f) => {
+                        // TODO: Add currying
+                        if n != args.len() {
+                            return Err(Error::from(EvaluateError::ArgumentMismatch {
+                                expected: n,
+                                got: args.len(),
+                            }));
+                        }
+                        Ok(f(args))
+                    }
+                    _ => Err(Error::from(EvaluateError::NotCallable(callable))),
+                }
+            }
         }
     }
 }
@@ -58,6 +79,14 @@ impl std::fmt::Display for Expr {
             Self::Binary(b) => write!(f, "{}", b),
             Self::Group(e) => write!(f, "(group {})", e),
             Self::Assignment(id, e) => write!(f, "(= {} {})", id, e),
+            Self::FnCall(expr, args) => {
+                write!(
+                    f,
+                    "({} {})",
+                    expr,
+                    args.iter().map(|e| e.to_string()).collect::<String>()
+                )
+            }
         }
     }
 }
@@ -67,17 +96,18 @@ impl Expr {
         trace(
             "expr",
             delimited(
-                tracking_multispace,
+                whitespace,
                 alt((Expr::assignment, Expr::logical_or)),
-                tracking_multispace,
+                whitespace,
             ),
         )
         .parse_next(input)
     }
 
     pub fn assignment<'s>(input: &mut Input<'s>) -> ModalResult<Expr, Error<'s, Input<'s>>> {
-        seq!(Literal::identifier, _: tracking_multispace, _: "=", _: tracking_multispace, Expr::parser)
-                        .map(|(id, e)| Expr::Assignment(id, Box::new(e))).parse_next(input)
+        seq!(Literal::identifier, _: whitespace, _: "=", _: whitespace, Expr::parser)
+            .map(|(id, e)| Expr::Assignment(id, Box::new(e)))
+            .parse_next(input)
     }
 
     pub fn logical_or<'s>(input: &mut Input<'s>) -> ModalResult<Expr, Error<'s, Input<'s>>> {
@@ -242,26 +272,52 @@ impl Expr {
             trace(
                 "unary",
                 (
-                    delimited(tracking_multispace, operator, tracking_multispace),
-                    terminated(Expr::unary, tracking_multispace),
+                    delimited(whitespace, operator, whitespace),
+                    terminated(Expr::unary, whitespace),
                 )
                     .map(|(neg, e)| match neg {
                         Sign::Negate => Expr::Unary(Unary::Negate(Box::new(e))),
                         Sign::Not => Expr::Unary(Unary::Not(Box::new(e))),
                     }),
             ),
-            trace("no unary", Expr::primary),
+            trace("no unary", Expr::call),
         ))
         .parse_next(input)
+    }
+
+    pub fn call<'s>(input: &mut Input<'s>) -> ModalResult<Expr, Error<'s, Input<'s>>> {
+        let init = Expr::primary(input)?;
+        trace(
+            "function calls",
+            repeat(0.., delimited("(", Expr::arguments, (")", whitespace))).fold(
+                move || init.clone(),
+                |acc, args: Vec<Expr>| Expr::FnCall(Box::new(acc), args),
+            ),
+        )
+        .parse_next(input)
+    }
+
+    fn arguments<'s>(input: &mut Input<'s>) -> ModalResult<Vec<Expr>, Error<'s, Input<'s>>> {
+        let head = trace("first argument", opt(Expr::parser)).parse_next(input)?;
+        let Some(head) = head else {
+            return Ok(vec![]);
+        };
+
+        let rest: Vec<Expr> = trace(
+            "rest of arguments",
+            repeat(0.., preceded((whitespace, ","), Expr::parser)),
+        )
+        .parse_next(input)?;
+        Ok(once(head).chain(rest).collect::<Vec<Expr>>())
     }
 
     pub fn primary<'s>(input: &mut Input<'s>) -> ModalResult<Self, Error<'s, Input<'s>>> {
         trace(
             "primary",
             delimited(
-                tracking_multispace,
+                whitespace,
                 alt((Expr::parenthesis, Literal::parser.map(Expr::Literal))),
-                tracking_multispace,
+                whitespace,
             ),
         )
         .parse_next(input)
@@ -273,8 +329,8 @@ impl Expr {
             preceded(
                 "(",
                 delimited(
-                    tracking_multispace,
-                    terminated(Self::parser, tracking_multispace),
+                    whitespace,
+                    terminated(Self::parser, whitespace),
                     alt((")", parse_error("Expect expression."))),
                 ),
             ),
@@ -478,7 +534,7 @@ impl std::fmt::Display for Binary {
     }
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Clone)]
 pub enum Literal {
     True,
     False,
@@ -486,6 +542,33 @@ pub enum Literal {
     Number(f64),
     String(String),
     Id(String),
+    NativeCallable(usize, Arc<dyn Fn(Vec<Literal>) -> Literal>),
+}
+
+impl std::fmt::Debug for Literal {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::True => write!(f, "True"),
+            Self::False => write!(f, "False"),
+            Self::Nil => write!(f, "Nil"),
+            Self::Number(n) => f.debug_tuple("Number").field(n).finish(),
+            Self::String(s) => f.debug_tuple("String").field(s).finish(),
+            Self::Id(id) => f.debug_tuple("Id").field(id).finish(),
+            Self::NativeCallable(i, _) => write!(f, "<native fn({i} args)>"),
+        }
+    }
+}
+
+impl PartialEq for Literal {
+    fn eq(&self, other: &Self) -> bool {
+        match (self, other) {
+            (Self::Number(l0), Self::Number(r0)) => l0 == r0,
+            (Self::String(l0), Self::String(r0)) => l0 == r0,
+            (Self::Id(l0), Self::Id(r0)) => l0 == r0,
+            (Self::NativeCallable(_, _), Self::NativeCallable(_, _)) => false,
+            _ => core::mem::discriminant(self) == core::mem::discriminant(other),
+        }
+    }
 }
 
 impl From<bool> for Literal {
@@ -553,7 +636,11 @@ impl Evaluate for Literal {
                 .get(s)
                 .cloned()
                 .ok_or_else(|| Error::from(EvaluateError::UndefinedVariable(s.clone()))),
-            _ => Ok(self.clone()),
+            // TODO: might change how we handle literals that are functions.
+            Self::NativeCallable(_, _) => Ok(self.clone()),
+            Self::Nil | Self::Number(_) | Self::String(_) | Self::True | Self::False => {
+                Ok(self.clone())
+            }
         }
     }
 }
@@ -563,7 +650,7 @@ impl Literal {
         trace(
             "literal",
             delimited(
-                tracking_multispace,
+                whitespace,
                 alt((
                     "true".value(Self::True),
                     "false".value(Self::False),
@@ -572,7 +659,7 @@ impl Literal {
                     Self::string,
                     Self::identifier.map(Self::Id),
                 )),
-                tracking_multispace,
+                whitespace,
             ),
         )
         .parse_next(input)
@@ -679,6 +766,7 @@ impl std::fmt::Display for Literal {
             Self::Number(n) => write!(f, "{n}"),
             Self::String(s) => write!(f, "{s}"),
             Self::Id(s) => write!(f, "{s}"),
+            Self::NativeCallable(n, _) => write!(f, "<native fn({n} args)>"),
         }
     }
 }
@@ -693,11 +781,11 @@ mod tests {
     #[test]
     fn test_bool() -> anyhow::Result<()> {
         let input = "true\n";
-        let res = parse(input)?;
+        let res = parse(input).unwrap();
         assert_eq!(res, Expr::Literal(Literal::True));
 
         let input = "false   \t";
-        let res = parse(input)?;
+        let res = parse(input).unwrap();
         assert_eq!(res, Expr::Literal(Literal::False));
         Ok(())
     }
@@ -705,7 +793,7 @@ mod tests {
     #[test]
     fn test_nil() -> anyhow::Result<()> {
         let input = "     nil   ";
-        let res = parse(input)?;
+        let res = parse(input).unwrap();
         assert_eq!(res, Expr::Literal(Literal::Nil));
         Ok(())
     }
@@ -713,7 +801,7 @@ mod tests {
     #[test]
     fn test_number() -> anyhow::Result<()> {
         let input = "123.45";
-        let res = parse(input)?;
+        let res = parse(input).unwrap();
         assert_eq!(res, Expr::Literal(Literal::Number(123.45)));
         Ok(())
     }
@@ -721,7 +809,7 @@ mod tests {
     #[test]
     fn test_string() -> anyhow::Result<()> {
         let input = "\n \"hello, world!\"";
-        let res = parse(input)?;
+        let res = parse(input).unwrap();
         assert_eq!(
             res,
             Expr::Literal(Literal::String("hello, world!".to_string()))
@@ -732,7 +820,7 @@ mod tests {
     #[test]
     fn test_unary() -> anyhow::Result<()> {
         let input = "-123.45    ";
-        let res = parse(input)?;
+        let res = parse(input).unwrap();
         assert_eq!(
             res,
             Expr::Unary(Unary::Negate(Box::new(Expr::Literal(Literal::Number(
@@ -746,7 +834,7 @@ mod tests {
     #[test]
     fn test_paren() -> anyhow::Result<()> {
         let input = "  !(  -123.45  )\t\n";
-        let res = parse(input)?;
+        let res = parse(input).unwrap();
         assert_eq!(
             res,
             Expr::Unary(Unary::Not(Box::new(Expr::Group(Box::new(Expr::Unary(
@@ -760,7 +848,7 @@ mod tests {
     #[test]
     fn test_term() -> anyhow::Result<()> {
         let input = "123.45 * 67.89 / 10.11";
-        let res = parse(input)?;
+        let res = parse(input).unwrap();
         assert_eq!(
             res,
             Expr::Binary(Binary::Div(
@@ -778,7 +866,7 @@ mod tests {
     #[test]
     fn test_term_codecrafters() -> anyhow::Result<()> {
         let input = "(76 * -50 / (56 * 42))";
-        let res = parse(input)?;
+        let res = parse(input).unwrap();
         assert_eq!(
             res.to_string(),
             "(group (/ (* 76.0 (- 50.0)) (group (* 56.0 42.0))))",
@@ -788,30 +876,27 @@ mod tests {
     }
 
     #[test]
-    fn test_add_sub_codecrafters() -> anyhow::Result<()> {
+    fn test_add_sub_codecrafters() {
         let input = "(72 * -62 / (42 * 98))";
-        let res = parse(input)?;
+        let res = parse(input).unwrap();
         assert_eq!(
             res.to_string(),
             "(group (/ (* 72.0 (- 62.0)) (group (* 42.0 98.0))))",
         );
-        Ok(())
     }
 
     #[test]
-    fn test_hello_plus_world() -> anyhow::Result<()> {
+    fn test_hello_plus_world() {
         let input = r#""hello" + "world""#;
-        let res = parse(input)?;
+        let res = parse(input).unwrap();
         assert_eq!(res.to_string(), "(+ hello world)",);
-        Ok(())
     }
 
     #[test]
-    fn test_comparison() -> anyhow::Result<()> {
+    fn test_comparison() {
         let input = "83 < 99 < 115";
-        let res = parse(input)?;
+        let res = parse(input).unwrap();
         assert_eq!(res.to_string(), "(< (< 83.0 99.0) 115.0)");
-        Ok(())
     }
 
     #[test]
