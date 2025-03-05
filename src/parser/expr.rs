@@ -452,6 +452,15 @@ impl From<usize> for Literal {
     }
 }
 
+impl From<Literal> for bool {
+    fn from(value: Literal) -> Self {
+        matches!(
+            value,
+            Literal::True | Literal::Number(_) | Literal::String(_)
+        )
+    }
+}
+
 impl Evaluate for Literal {
     fn evaluate<'s, 'env>(
         &'s self,
@@ -471,7 +480,7 @@ impl Evaluate for Literal {
 }
 
 impl Literal {
-    pub fn parser<'s>(input: &mut Input<'s>) -> ModalResult<Self, Error<'s, Input<'s>>> {
+    pub(crate) fn parser<'s>(input: &mut Input<'s>) -> ModalResult<Self, Error<'s, Input<'s>>> {
         trace(
             "literal",
             delimited(
@@ -535,7 +544,9 @@ impl Literal {
         .parse_next(input)
     }
 
-    pub fn identifier<'s>(input: &mut Input<'s>) -> ModalResult<String, Error<'s, Input<'s>>> {
+    pub(crate) fn identifier<'s>(
+        input: &mut Input<'s>,
+    ) -> ModalResult<String, Error<'s, Input<'s>>> {
         let id = (
             any.verify(|c: &<Input as Stream>::Token| {
                 let c = c.as_char();

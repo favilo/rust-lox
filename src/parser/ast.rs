@@ -1,5 +1,5 @@
 use winnow::{
-    combinator::{alt, delimited, opt, preceded, repeat, terminated},
+    combinator::{alt, delimited, opt, preceded, repeat, terminated, todo},
     seq, ModalResult, Parser,
 };
 
@@ -26,6 +26,7 @@ pub enum Statement {
     Print(Expr),
     Var(String, Expr),
     Block(Vec<Statement>),
+    If(Expr, Box<Statement>, Option<Box<Statement>>),
 }
 
 impl Evaluate for Ast {
@@ -72,6 +73,16 @@ impl Evaluate for Statement {
                 }
                 Ok(last)
             }
+            Statement::If(condition, true_s, false_s) => {
+                let condition = bool::from(condition.evaluate(env)?);
+                if condition {
+                    true_s.evaluate(env)
+                } else if let Some(false_s) = false_s {
+                    false_s.evaluate(env)
+                } else {
+                    Ok(Literal::Nil)
+                }
+            }
         }
     }
 }
@@ -87,31 +98,63 @@ impl Run for Ast {
 
 impl Ast {
     fn parser<'s>(input: &mut Input<'s>) -> ModalResult<Self, Error<'s, Input<'s>>> {
-        repeat(
-            0..,
-            preceded(
-                tracking_multispace,
-                alt((
-                    Self::block,
-                    terminated(
-                        alt((Self::print, Self::var, Expr::parser.map(Statement::Expr))),
-                        (
-                            tracking_multispace,
-                            alt((";", parse_error("Expect ';'"))),
-                            tracking_multispace,
-                        ),
-                    ),
-                )),
+        repeat(0.., Statement::parser)
+            .map(|statements| Self { statements })
+            .parse_next(input)
+    }
+}
+
+impl Statement {
+    fn parser<'s>(input: &mut Input<'s>) -> ModalResult<Self, Error<'s, Input<'s>>> {
+        delimited(tracking_multispace, Self::declaration, tracking_multispace).parse_next(input)
+    }
+
+    fn declaration<'s>(input: &mut Input<'s>) -> ModalResult<Statement, Error<'s, Input<'s>>> {
+        alt((
+            terminated(
+                Self::var,
+                (
+                    tracking_multispace,
+                    alt((";", parse_error("Expect ';'"))),
+                    tracking_multispace,
+                ),
             ),
-        )
-        .map(|statements| Self { statements })
+            Self::stmt,
+        ))
+        .parse_next(input)
+    }
+
+    fn stmt<'s>(input: &mut Input<'s>) -> ModalResult<Statement, Error<'s, Input<'s>>> {
+        alt((
+            terminated(alt((Self::block, Self::condition)), tracking_multispace),
+            terminated(
+                alt((Self::print, Expr::parser.map(Statement::Expr))),
+                (
+                    tracking_multispace,
+                    alt((";", parse_error("Expect ';'"))),
+                    tracking_multispace,
+                ),
+            ),
+        ))
+        .parse_next(input)
+    }
+
+    fn condition<'s>(input: &mut Input<'s>) -> ModalResult<Statement, Error<'s, Input<'s>>> {
+        seq! {
+            _: ("if", tracking_multispace, alt(("(", parse_error("Expect '('"))), tracking_multispace),
+            Expr::parser,
+            _: (tracking_multispace, alt((")", parse_error("Expect ')'"))), tracking_multispace),
+            Self::stmt,
+            opt(preceded((tracking_multispace, "else", tracking_multispace), Self::stmt)),
+        }
+        .map(|(condition, true_s, false_s)| Statement::If(condition, Box::new(true_s), false_s.map(Box::new)))
         .parse_next(input)
     }
 
     fn block<'s>(input: &mut Input<'s>) -> ModalResult<Statement, Error<'s, Input<'s>>> {
         delimited(
             "{",
-            Self::parser.map(|ast| Statement::Block(ast.statements)),
+            Ast::parser.map(|ast| Statement::Block(ast.statements)),
             alt((("}", tracking_multispace), parse_error("Expect '}'"))),
         )
         .parse_next(input)
@@ -210,5 +253,15 @@ print true;
         let ast: Ast = parse(input).unwrap();
         let res = ast.evaluate(&mut view).unwrap();
         assert_eq!(res, Literal::Number(8.0));
+    }
+
+    #[test]
+    fn test_condition() {
+        let input = r#"if (true) {3;} else {4;}"#;
+        let mut env = Environment::new();
+        let mut view = env.view();
+        let ast: Ast = parse(input).unwrap();
+        let res = ast.evaluate(&mut view).unwrap();
+        assert_eq!(res, Literal::Number(3.0));
     }
 }
