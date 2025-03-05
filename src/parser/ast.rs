@@ -1,9 +1,12 @@
 use winnow::{
     combinator::{alt, delimited, opt, preceded, repeat, terminated},
-    seq, LocatingSlice, ModalResult, Parser,
+    seq, ModalResult, Parser,
 };
 
-use crate::{error::Error, interpreter::InterpreterState};
+use crate::{
+    error::Error,
+    interpreter::{Environment, EnvironmentView},
+};
 
 use super::{
     expr::{Expr, Literal},
@@ -22,34 +25,62 @@ pub enum Statement {
     Expr(Expr),
     Print(Expr),
     Var(String, Expr),
+    Block(Vec<Statement>),
 }
 
 impl Evaluate for Ast {
-    fn evaluate(&self, state: &mut InterpreterState) -> Result<Literal, Error<'_, Input<'_>>> {
+    fn evaluate<'s, 'env>(
+        &'s self,
+        env: &'env mut EnvironmentView,
+    ) -> Result<Literal, Error<'s, Input<'s>>>
+    where
+        's: 'env,
+    {
         let mut last = Literal::Nil;
         for statement in &self.statements {
-            match statement {
-                Statement::Expr(expr) => last = expr.evaluate(state)?,
-                Statement::Print(expr) => {
-                    last = Literal::Nil;
-                    println!("{}", expr.evaluate(state)?)
-                }
-                Statement::Var(name, expr) => {
-                    let value = expr.evaluate(state)?;
-                    state.set(name, value.clone());
-                    last = value;
-                }
-            }
+            last = statement.evaluate(env)?;
         }
 
         Ok(last)
     }
 }
 
+impl Evaluate for Statement {
+    fn evaluate<'s, 'env>(
+        &'s self,
+        env: &'env mut EnvironmentView,
+    ) -> Result<Literal, Error<'s, Input<'s>>>
+    where
+        's: 'env,
+    {
+        match self {
+            Statement::Expr(expr) => expr.evaluate(env),
+            Statement::Print(expr) => {
+                println!("{}", expr.evaluate(env)?);
+                Ok(Literal::Nil)
+            }
+            Statement::Var(name, expr) => {
+                let value = expr.evaluate(env)?;
+                env.define(name, value.clone());
+                Ok(value)
+            }
+            Statement::Block(statements) => {
+                let mut last = Literal::Nil;
+                let mut block_state = env.child_view();
+                for statement in statements {
+                    last = statement.evaluate(&mut block_state)?;
+                }
+                Ok(last)
+            }
+        }
+    }
+}
+
 impl Run for Ast {
     fn run(&self) -> Result<(), Error<'_, Input<'_>>> {
-        let mut state = InterpreterState::new();
-        self.evaluate(&mut state)?;
+        let mut env = Environment::new();
+        let mut view = env.view();
+        self.evaluate(&mut view)?;
         Ok(())
     }
 }
@@ -58,17 +89,31 @@ impl Ast {
     fn parser<'s>(input: &mut Input<'s>) -> ModalResult<Self, Error<'s, Input<'s>>> {
         repeat(
             0..,
-            delimited(
+            preceded(
                 tracking_multispace,
-                alt((Self::print, Self::var, Expr::parser.map(Statement::Expr))),
-                (
-                    tracking_multispace,
-                    alt((";", parse_error("Expect ';'"))),
-                    tracking_multispace,
-                ),
+                alt((
+                    Self::block,
+                    terminated(
+                        alt((Self::print, Self::var, Expr::parser.map(Statement::Expr))),
+                        (
+                            tracking_multispace,
+                            alt((";", parse_error("Expect ';'"))),
+                            tracking_multispace,
+                        ),
+                    ),
+                )),
             ),
         )
         .map(|statements| Self { statements })
+        .parse_next(input)
+    }
+
+    fn block<'s>(input: &mut Input<'s>) -> ModalResult<Statement, Error<'s, Input<'s>>> {
+        delimited(
+            "{",
+            Self::parser.map(|ast| Statement::Block(ast.statements)),
+            alt((("}", tracking_multispace), parse_error("Expect '}'"))),
+        )
         .parse_next(input)
     }
 
@@ -99,7 +144,7 @@ impl Ast {
 }
 
 pub fn parse(input: &str) -> Result<Ast, Error<'_, Input<'_>>> {
-    let ast = Ast::parser.parse(Stateful::new(LocatingSlice::new(input), State::new(1)))?;
+    let ast = Ast::parser.parse(Stateful::new(input, State::new(1)))?;
     Ok(ast)
 }
 
@@ -111,7 +156,7 @@ mod tests {
     fn test_mul_div() {
         let input = "1 / 2 * 3;";
         let ast = parse(input).unwrap();
-        let res = ast.evaluate(&mut Default::default());
+        let res = ast.evaluate(&mut Environment::new().view());
         assert!(res.is_ok());
         assert_eq!(res.unwrap(), Literal::Number(1.0 / 2.0 * 3.0));
     }
@@ -147,5 +192,23 @@ print true;
         let ast = parse(input).unwrap();
         let res = ast.run();
         assert!(res.is_ok());
+    }
+
+    #[test]
+    fn test_block() {
+        let input = r#"
+            var a = 1;
+            {
+                var b = 2;
+                a = 5;
+                b = 3;
+                a + b;
+            }
+        "#;
+        let mut env = Environment::new();
+        let mut view = env.view();
+        let ast: Ast = parse(input).unwrap();
+        let res = ast.evaluate(&mut view).unwrap();
+        assert_eq!(res, Literal::Number(8.0));
     }
 }

@@ -3,12 +3,12 @@ use winnow::{
     error::ErrMode,
     stream::Stream,
     token::{any, one_of},
-    LocatingSlice, ModalResult, Parser,
+    ModalResult, Parser,
 };
 
 use crate::{
     error::{Error, ParseError},
-    interpreter::InterpreterState,
+    interpreter::EnvironmentView,
     parser::{expr::Literal, state::Stateful},
 };
 
@@ -16,10 +16,16 @@ pub mod ast;
 pub mod expr;
 pub mod state;
 
-pub type Input<'s> = Stateful<LocatingSlice<&'s str>>;
+pub type InputStream<'s> = &'s str;
+pub type Input<'s> = Stateful<InputStream<'s>>;
 
 pub trait Evaluate {
-    fn evaluate(&self, _: &mut InterpreterState) -> Result<Literal, Error<'_, Input<'_>>>;
+    fn evaluate<'s, 'env>(
+        &'s self,
+        _: &'env mut EnvironmentView,
+    ) -> Result<Literal, Error<'s, Input<'s>>>
+    where
+        's: 'env;
 }
 
 pub trait Run {

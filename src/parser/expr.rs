@@ -7,12 +7,12 @@ use winnow::{
     seq,
     stream::{AsBStr, AsChar, Compare, ParseSlice, Stream, StreamIsPartial},
     token::{any, one_of, take_till, take_while},
-    LocatingSlice, ModalResult, Parser,
+    ModalResult, Parser,
 };
 
 use crate::{
     error::{Error, EvaluateError},
-    interpreter::InterpreterState,
+    interpreter::EnvironmentView,
     parser::state::{State, Stateful},
 };
 
@@ -28,15 +28,21 @@ pub enum Expr {
 }
 
 impl Evaluate for Expr {
-    fn evaluate(&self, state: &mut InterpreterState) -> Result<Literal, Error<'_, Input<'_>>> {
+    fn evaluate<'s, 'env>(
+        &'s self,
+        env: &'env mut EnvironmentView,
+    ) -> Result<Literal, Error<'s, Input<'s>>>
+    where
+        's: 'env,
+    {
         match self {
-            Self::Literal(l) => l.evaluate(state),
-            Self::Group(e) => e.evaluate(state),
-            Self::Unary(u) => u.evaluate(state),
-            Self::Binary(b) => b.evaluate(state),
+            Self::Literal(l) => l.evaluate(env),
+            Self::Group(e) => e.evaluate(env),
+            Self::Unary(u) => u.evaluate(env),
+            Self::Binary(b) => b.evaluate(env),
             Self::Assignment(id, e) => {
-                let value = e.evaluate(state)?;
-                state.set(id, value.clone());
+                let value = e.evaluate(env)?;
+                env.set(id, value.clone());
                 Ok(value)
             }
         }
@@ -241,9 +247,15 @@ pub enum Unary {
 }
 
 impl Evaluate for Unary {
-    fn evaluate(&self, state: &mut InterpreterState) -> Result<Literal, Error<'_, Input<'_>>> {
+    fn evaluate<'s, 'env>(
+        &'s self,
+        env: &'env mut EnvironmentView,
+    ) -> Result<Literal, Error<'s, Input<'s>>>
+    where
+        's: 'env,
+    {
         match self {
-            Self::Negate(e) => Ok(match e.evaluate(state)? {
+            Self::Negate(e) => Ok(match e.evaluate(env)? {
                 Literal::Number(n) => Literal::Number(-n),
                 _ => {
                     return Err(Error::from(EvaluateError::TypeMismatch {
@@ -251,7 +263,7 @@ impl Evaluate for Unary {
                     }))
                 }
             }),
-            Self::Not(e) => Ok(match e.evaluate(state)? {
+            Self::Not(e) => Ok(match e.evaluate(env)? {
                 Literal::Nil => Literal::True,
                 Literal::True => Literal::False,
                 Literal::False => Literal::True,
@@ -286,9 +298,15 @@ pub enum Binary {
 }
 
 impl Evaluate for Binary {
-    fn evaluate(&self, state: &mut InterpreterState) -> Result<Literal, Error<'_, Input<'_>>> {
+    fn evaluate<'s, 'env>(
+        &'s self,
+        env: &'env mut EnvironmentView,
+    ) -> Result<Literal, Error<'s, Input<'s>>>
+    where
+        's: 'env,
+    {
         match self {
-            Self::Mul(l, r) => Ok(match (l.evaluate(state)?, r.evaluate(state)?) {
+            Self::Mul(l, r) => Ok(match (l.evaluate(env)?, r.evaluate(env)?) {
                 (Literal::Number(l), Literal::Number(r)) => Literal::from(l * r),
                 _ => {
                     return Err(Error::from(EvaluateError::TypeMismatch {
@@ -296,7 +314,7 @@ impl Evaluate for Binary {
                     }))
                 }
             }),
-            Self::Div(l, r) => Ok(match (l.evaluate(state)?, r.evaluate(state)?) {
+            Self::Div(l, r) => Ok(match (l.evaluate(env)?, r.evaluate(env)?) {
                 (Literal::Number(l), Literal::Number(r)) => Literal::from(l / r),
                 _ => {
                     return Err(Error::from(EvaluateError::TypeMismatch {
@@ -304,7 +322,7 @@ impl Evaluate for Binary {
                     }))
                 }
             }),
-            Self::Add(l, r) => Ok(match (l.evaluate(state)?, r.evaluate(state)?) {
+            Self::Add(l, r) => Ok(match (l.evaluate(env)?, r.evaluate(env)?) {
                 (Literal::Number(l), Literal::Number(r)) => Literal::from(l + r),
                 (Literal::String(s), Literal::String(t)) => Literal::from(format!("{}{}", s, t)),
                 _ => {
@@ -313,7 +331,7 @@ impl Evaluate for Binary {
                     }))
                 }
             }),
-            Self::Sub(l, r) => Ok(match (l.evaluate(state)?, r.evaluate(state)?) {
+            Self::Sub(l, r) => Ok(match (l.evaluate(env)?, r.evaluate(env)?) {
                 (Literal::Number(l), Literal::Number(r)) => Literal::from(l - r),
                 _ => {
                     return Err(Error::from(EvaluateError::TypeMismatch {
@@ -321,7 +339,7 @@ impl Evaluate for Binary {
                     }))
                 }
             }),
-            Self::LessThan(l, r) => Ok(match (l.evaluate(state)?, r.evaluate(state)?) {
+            Self::LessThan(l, r) => Ok(match (l.evaluate(env)?, r.evaluate(env)?) {
                 (Literal::Number(l), Literal::Number(r)) => Literal::from(l < r),
                 _ => {
                     return Err(Error::from(EvaluateError::TypeMismatch {
@@ -329,7 +347,7 @@ impl Evaluate for Binary {
                     }))
                 }
             }),
-            Self::GreaterThan(l, r) => Ok(match (l.evaluate(state)?, r.evaluate(state)?) {
+            Self::GreaterThan(l, r) => Ok(match (l.evaluate(env)?, r.evaluate(env)?) {
                 (Literal::Number(l), Literal::Number(r)) => Literal::from(l > r),
                 _ => {
                     return Err(Error::from(EvaluateError::TypeMismatch {
@@ -337,7 +355,7 @@ impl Evaluate for Binary {
                     }))
                 }
             }),
-            Self::LessEq(l, r) => Ok(match (l.evaluate(state)?, r.evaluate(state)?) {
+            Self::LessEq(l, r) => Ok(match (l.evaluate(env)?, r.evaluate(env)?) {
                 (Literal::Number(l), Literal::Number(r)) => Literal::from(l <= r),
                 _ => {
                     return Err(Error::from(EvaluateError::TypeMismatch {
@@ -345,7 +363,7 @@ impl Evaluate for Binary {
                     }))
                 }
             }),
-            Self::GreaterEq(l, r) => Ok(match (l.evaluate(state)?, r.evaluate(state)?) {
+            Self::GreaterEq(l, r) => Ok(match (l.evaluate(env)?, r.evaluate(env)?) {
                 (Literal::Number(l), Literal::Number(r)) => Literal::from(l >= r),
                 _ => {
                     return Err(Error::from(EvaluateError::TypeMismatch {
@@ -353,7 +371,7 @@ impl Evaluate for Binary {
                     }))
                 }
             }),
-            Self::Equals(l, r) => Ok(match (l.evaluate(state)?, r.evaluate(state)?) {
+            Self::Equals(l, r) => Ok(match (l.evaluate(env)?, r.evaluate(env)?) {
                 (Literal::Number(l), Literal::Number(r)) => Literal::from(l == r),
                 (Literal::String(s), Literal::String(t)) => Literal::from(s == t),
                 (Literal::Nil, Literal::Nil) => Literal::True,
@@ -361,7 +379,7 @@ impl Evaluate for Binary {
                 (Literal::False, Literal::False) => Literal::True,
                 _ => Literal::False,
             }),
-            Self::NotEquals(l, r) => Ok(match (l.evaluate(state)?, r.evaluate(state)?) {
+            Self::NotEquals(l, r) => Ok(match (l.evaluate(env)?, r.evaluate(env)?) {
                 (Literal::Number(l), Literal::Number(r)) => Literal::from(l != r),
                 (Literal::String(s), Literal::String(t)) => Literal::from(s != t),
                 (Literal::Nil, Literal::Nil) => Literal::False,
@@ -435,9 +453,15 @@ impl From<usize> for Literal {
 }
 
 impl Evaluate for Literal {
-    fn evaluate(&self, state: &mut InterpreterState) -> Result<Literal, Error<'_, Input<'_>>> {
+    fn evaluate<'s, 'env>(
+        &'s self,
+        env: &'env mut EnvironmentView,
+    ) -> Result<Literal, Error<'s, Input<'s>>>
+    where
+        's: 'env,
+    {
         match self {
-            Self::Id(s) => state
+            Self::Id(s) => env
                 .get(s)
                 .cloned()
                 .ok_or_else(|| Error::from(EvaluateError::UndefinedVariable(s.clone()))),
@@ -567,7 +591,7 @@ impl std::fmt::Display for Literal {
 }
 
 pub fn parse(input: &str) -> Result<Expr, Error<'_, Input<'_>>> {
-    Ok(Expr::parser.parse(Stateful::new(LocatingSlice::new(input), State::new(1)))?)
+    Ok(Expr::parser.parse(Stateful::new(input, State::new(1)))?)
 }
 
 #[cfg(test)]

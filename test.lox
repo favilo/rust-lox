@@ -1,4 +1,8 @@
 // comments
-var foo;
-foo = 32;
-print foo;
+var a = 1;
+{
+    var b = 2;
+    a = 5;
+    b = 3;
+    a + b;
+}

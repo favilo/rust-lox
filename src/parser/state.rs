@@ -6,6 +6,7 @@ use winnow::{
         AsBStr, AsBytes, Compare, CompareResult, FindSlice, Location, Offset, SliceLen, Stream,
         StreamIsPartial, UpdateSlice,
     },
+    LocatingSlice,
 };
 
 #[derive(Debug, Clone, Copy, Default, Eq, PartialEq)]

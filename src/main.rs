@@ -1,6 +1,7 @@
 use std::{fs, path::PathBuf};
 
 use clap::{Parser, Subcommand};
+use interpreter::Environment;
 
 use crate::parser::{Evaluate, Run};
 
@@ -69,8 +70,9 @@ fn main() {
                 eprintln!("Failed to parse file {}", res.unwrap_err());
                 std::process::exit(65);
             };
-            let mut state = Default::default();
-            let res = expr.evaluate(&mut state);
+            let mut env = Environment::new();
+            let mut view = env.view();
+            let res = expr.evaluate(&mut view);
             let Ok(result) = res else {
                 eprintln!("Failed to evaluate file {}", res.unwrap_err());
                 std::process::exit(70);
