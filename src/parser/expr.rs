@@ -117,7 +117,7 @@ impl Expr {
             .fold(
                 move || init.clone(),
                 |acc, (_, val): (<Input as Stream>::Slice, Expr)| {
-                    Expr::Binary(Binary::Or(Box::new(acc), Box::new(val)))
+                    Expr::Binary(Binary::And(Box::new(acc), Box::new(val)))
                 },
             ),
         )
@@ -340,6 +340,7 @@ pub enum Binary {
     Equals(Box<Expr>, Box<Expr>),
     NotEquals(Box<Expr>, Box<Expr>),
     Or(Box<Expr>, Box<Expr>),
+    And(Box<Expr>, Box<Expr>),
 }
 
 impl Evaluate for Binary {
@@ -434,7 +435,25 @@ impl Evaluate for Binary {
             }),
             Self::Or(l, r) => {
                 let a = l.evaluate(env)?;
-                Ok(if bool::from(&a) { a } else { r.evaluate(env)? })
+                log::debug!("Or: {a}");
+                Ok(if bool::from(&a) {
+                    a
+                } else {
+                    let b = r.evaluate(env)?;
+                    log::debug!("Or false: {b}");
+                    b
+                })
+            }
+            Self::And(l, r) => {
+                let a = l.evaluate(env)?;
+                log::debug!("And: {a}");
+                Ok(if bool::from(&a) {
+                    let b = r.evaluate(env)?;
+                    log::debug!("And true: {b}");
+                    b
+                } else {
+                    a
+                })
             }
         }
     }
@@ -454,6 +473,7 @@ impl std::fmt::Display for Binary {
             Self::Equals(l, r) => write!(f, "(== {} {})", l, r),
             Self::NotEquals(l, r) => write!(f, "(!= {} {})", l, r),
             Self::Or(l, r) => write!(f, "(or {} {})", l, r),
+            Self::And(l, r) => write!(f, "(and {} {})", l, r),
         }
     }
 }

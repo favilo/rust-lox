@@ -30,6 +30,7 @@ struct Common {
 }
 
 fn main() {
+    env_logger::init();
     let args = Args::parse();
 
     let command = &args.cmd;

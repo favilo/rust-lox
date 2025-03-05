@@ -1,10 +1,9 @@
-// This program relies on the fact that assignments return the assigned value
-// And that the logical OR operator short-circuits
-// So, if the first assignment is truthy, it wouldn't proceed to the subsequent assignments
-// And then prints the assigned values
-var a = "foo";
-var b = "foo";
-(a = false) or (b = true) or (a = "foo");
-print a;
-print b;
+// The logical AND operator should return the first falsy value
+if (false and "bad") print "world";
+if (nil and "bad") print "world";
 
+// If all values are truthy, it returns the last value
+if (true and "bar") print "bar";
+if (28 and "foo") print "foo";
+if ("foo" and "foo") print "foo";
+if ("" and "hello") print "hello";
