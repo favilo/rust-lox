@@ -1,6 +1,6 @@
 use winnow::{
-    combinator::{alt, delimited, preceded, repeat, terminated},
-    LocatingSlice, ModalResult, Parser,
+    combinator::{alt, delimited, opt, preceded, repeat, terminated},
+    seq, LocatingSlice, ModalResult, Parser,
 };
 
 use crate::{error::Error, interpreter::InterpreterState};
@@ -73,19 +73,19 @@ impl Ast {
     }
 
     fn var<'s>(input: &mut Input<'s>) -> ModalResult<Statement, Error<'s, Input<'s>>> {
-        (
-            delimited(
-                terminated("var", tracking_multispace),
-                alt((Literal::identifier, parse_error("expect identifier."))),
-                alt((
-                    (tracking_multispace, "=", tracking_multispace),
-                    parse_error("expected '='"),
-                )),
-            ),
-            Expr::parser,
-        )
-            .map(|(name, expr)| Statement::Var(name, expr))
-            .parse_next(input)
+        let (id, var) = seq! {
+            _: terminated("var", tracking_multispace),
+            alt((Literal::identifier, parse_error("expect identifier."))),
+            opt((tracking_multispace, "=", tracking_multispace).void()),
+        }
+        .parse_next(input)?;
+
+        if var.is_some() {
+            let expr = alt((Expr::parser, parse_error("Expect expression"))).parse_next(input)?;
+            Ok(Statement::Var(id, expr))
+        } else {
+            Ok(Statement::Var(id, Expr::Literal(Literal::Nil)))
+        }
     }
 
     fn print<'s>(input: &mut Input<'s>) -> ModalResult<Statement, Error<'s, Input<'s>>> {
