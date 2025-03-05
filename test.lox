@@ -1,9 +1,2 @@
-// The logical AND operator should return the first falsy value
-if (false and "bad") print "world";
-if (nil and "bad") print "world";
-
-// If all values are truthy, it returns the last value
-if (true and "bar") print "bar";
-if (28 and "foo") print "foo";
-if ("foo" and "foo") print "foo";
-if ("" and "hello") print "hello";
+var foo = 0;
+while (foo < 3) print foo = foo + 1;

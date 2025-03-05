@@ -1,5 +1,5 @@
 use winnow::{
-    combinator::{alt, delimited, opt, preceded, repeat, terminated, todo},
+    combinator::{alt, delimited, opt, preceded, repeat, terminated},
     seq, ModalResult, Parser,
 };
 
@@ -27,6 +27,7 @@ pub enum Statement {
     Var(String, Expr),
     Block(Vec<Statement>),
     If(Expr, Box<Statement>, Option<Box<Statement>>),
+    While(Expr, Box<Statement>),
 }
 
 impl Evaluate for Ast {
@@ -83,6 +84,13 @@ impl Evaluate for Statement {
                     Ok(Literal::Nil)
                 }
             }
+            Statement::While(condition, stmt) => {
+                let mut last = Literal::Nil;
+                while bool::from(condition.evaluate(env)?) {
+                    last = stmt.evaluate(env)?;
+                }
+                Ok(last)
+            }
         }
     }
 }
@@ -126,7 +134,10 @@ impl Statement {
 
     fn stmt<'s>(input: &mut Input<'s>) -> ModalResult<Statement, Error<'s, Input<'s>>> {
         alt((
-            terminated(alt((Self::block, Self::condition)), tracking_multispace),
+            terminated(
+                alt((Self::block, Self::condition, Self::while_loop)),
+                tracking_multispace,
+            ),
             terminated(
                 alt((Self::print, Expr::parser.map(Statement::Expr))),
                 (
@@ -136,6 +147,17 @@ impl Statement {
                 ),
             ),
         ))
+        .parse_next(input)
+    }
+
+    fn while_loop<'s>(input: &mut Input<'s>) -> ModalResult<Statement, Error<'s, Input<'s>>> {
+        seq! {
+            _: ("while", tracking_multispace, alt(("(", parse_error("Expect '('"))), tracking_multispace),
+            Expr::parser,
+            _: (tracking_multispace, alt((")", parse_error("Expect ')'"))), tracking_multispace),
+            Self::stmt,
+        }
+        .map(|(condition, stmt)| Statement::While(condition, Box::new(stmt)))
         .parse_next(input)
     }
 
