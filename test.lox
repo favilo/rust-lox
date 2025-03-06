@@ -1,4 +1,9 @@
-// This function takes three arguments and prints their sum
-fun f3(a, b, c) { return 4; }
-v = f3(41, 41, 41);
-print v;
+// This program computes the 35th Fibonacci number
+fun fib(n) {
+  if (n < 2) return n;
+  return fib(n - 2) + fib(n - 1);
+}
+
+var start = clock();
+print fib(10) == 55;
+print (clock() - start) < 5; // 5 seconds

@@ -1,4 +1,8 @@
-use std::{hash::Hash, iter::once, sync::Arc};
+use std::{
+    hash::Hash,
+    iter::{once, zip},
+    sync::Arc,
+};
 use winnow::{
     ascii::{digit1, Caseless},
     combinator::{alt, cut_err, delimited, empty, fail, opt, preceded, repeat, terminated, trace},
@@ -12,7 +16,7 @@ use winnow::{
 
 use crate::{
     error::{Error, EvaluateError},
-    interpreter::EnvironmentView,
+    interpreter::Context,
     parser::state::{State, Stateful},
 };
 
@@ -29,9 +33,9 @@ pub enum Expr {
 }
 
 impl Evaluate for Expr {
-    fn evaluate<'s, 'env>(&'s self, env: &'env mut EnvironmentView) -> Result<Value, EvaluateError>
+    fn evaluate<'s, 'ctx>(&'s self, env: &'ctx Context) -> Result<Value, EvaluateError>
     where
-        's: 'env,
+        's: 'ctx,
     {
         match self {
             Self::Literal(l) => l.evaluate(env),
@@ -44,11 +48,13 @@ impl Evaluate for Expr {
                 Ok(value)
             }
             Self::FnCall(expr, args) => {
+                log::trace!("Function call: {expr}({args:#?})");
                 let args = args
                     .iter()
                     .map(|e| e.evaluate(env))
                     .collect::<Result<Vec<_>, _>>()?;
                 let callable = expr.evaluate(env)?;
+                log::trace!("Callable: {callable}");
                 match callable {
                     Value::NativeCallable(n, f) => {
                         // TODO: Add currying
@@ -60,7 +66,7 @@ impl Evaluate for Expr {
                         }
                         Ok(f(args))
                     }
-                    Value::Callable(_name, names, stmt) => {
+                    Value::Callable(_name, names, stmt, parent_env) => {
                         // TODO: Add currying
                         if names.len() != args.len() {
                             return Err(EvaluateError::ArgumentMismatch {
@@ -68,13 +74,17 @@ impl Evaluate for Expr {
                                 got: args.len(),
                             });
                         }
-                        let mut fn_env = env.child_view();
-                        for (name, value) in names.iter().zip(args.iter()) {
-                            fn_env.define(name, value.clone());
-                        }
+                        let fn_env = parent_env.child();
+                        zip(names.iter(), args.iter())
+                            .for_each(|(name, arg)| fn_env.declare(name, arg.clone()));
+                        log::debug!("Function env: {fn_env:#?}");
                         let stmt = Arc::unwrap_or_clone(stmt);
-                        let value = stmt.evaluate(&mut fn_env)?.clone();
-                        Ok(value)
+                        let result = stmt.evaluate(&fn_env);
+                        if let Err(EvaluateError::Return(n)) = result {
+                            Ok(n)
+                        } else {
+                            Ok(result?)
+                        }
                     }
                     _ => Err(EvaluateError::NotCallable(callable)),
                 }
@@ -360,9 +370,9 @@ pub enum Unary {
 }
 
 impl Evaluate for Unary {
-    fn evaluate<'s, 'env>(&'s self, env: &'env mut EnvironmentView) -> Result<Value, EvaluateError>
+    fn evaluate<'s, 'ctx>(&'s self, env: &'ctx Context) -> Result<Value, EvaluateError>
     where
-        's: 'env,
+        's: 'ctx,
     {
         match self {
             Self::Negate(e) => Ok(match e.evaluate(env)? {
@@ -408,9 +418,9 @@ pub enum Binary {
 }
 
 impl Evaluate for Binary {
-    fn evaluate<'s, 'env>(&'s self, env: &'env mut EnvironmentView) -> Result<Value, EvaluateError>
+    fn evaluate<'s, 'ctx>(&'s self, env: &'ctx Context) -> Result<Value, EvaluateError>
     where
-        's: 'env,
+        's: 'ctx,
     {
         match self {
             Self::Mul(l, r) => Ok(match (l.evaluate(env)?, r.evaluate(env)?) {
@@ -626,14 +636,13 @@ impl From<&Literal> for bool {
 }
 
 impl Evaluate for Literal {
-    fn evaluate<'s, 'env>(&'s self, env: &'env mut EnvironmentView) -> Result<Value, EvaluateError>
+    fn evaluate<'s, 'ctx>(&'s self, env: &'ctx Context) -> Result<Value, EvaluateError>
     where
-        's: 'env,
+        's: 'ctx,
     {
         Ok(match self {
             Self::Id(s) => env
                 .get(s)
-                .cloned()
                 .ok_or_else(|| EvaluateError::UndefinedVariable(s.clone()))?,
             // TODO: might change how we handle literals that are functions.
             Self::Nil => Value::Nil,

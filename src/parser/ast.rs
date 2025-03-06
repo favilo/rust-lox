@@ -7,7 +7,8 @@ use winnow::{
 
 use crate::{
     error::{Error, EvaluateError},
-    interpreter::{Environment, EnvironmentView},
+    interpreter::Context,
+    parser::whitespace1,
 };
 
 use super::{
@@ -90,9 +91,9 @@ impl std::fmt::Display for Statement {
 }
 
 impl Evaluate for Ast {
-    fn evaluate<'s, 'env>(&'s self, env: &'env mut EnvironmentView) -> Result<Value, EvaluateError>
+    fn evaluate<'s, 'ctx>(&'s self, env: &'ctx Context) -> Result<Value, EvaluateError>
     where
-        's: 'env,
+        's: 'ctx,
     {
         let mut last = Value::Nil;
         for statement in &self.statements {
@@ -108,37 +109,41 @@ impl Evaluate for Ast {
 }
 
 impl Evaluate for Statement {
-    fn evaluate<'s, 'env>(&self, env: &'env mut EnvironmentView) -> Result<Value, EvaluateError>
+    fn evaluate<'s, 'ctx>(&self, env: &'ctx Context) -> Result<Value, EvaluateError>
     where
-        's: 'env,
+        's: 'ctx,
     {
         match self {
-            Statement::Expr(expr) => expr.evaluate(env),
+            Statement::Expr(expr) => {
+                log::trace!("evaluate: {}", expr);
+                expr.evaluate(env)
+            }
             Statement::Print(expr) => {
+                log::trace!("print: {}", expr);
                 println!("{}", expr.evaluate(env)?);
                 Ok(Value::Nil)
             }
             Statement::Var(name, expr) => {
+                log::trace!("var: {} = {}", name, expr);
                 let value = expr.evaluate(env)?;
-                env.define(name, value.clone());
+                env.declare(name, value.clone());
                 log::debug!("define: {} = {:?}", name, value);
                 log::debug!("environment: {:?}", env);
                 Ok(value)
             }
             Statement::Block(statements) => {
+                log::trace!("block: {:?}", statements);
                 let mut last = Value::Nil;
-                let mut block_state = env.child_view();
-                log::debug!("block environment: {:?}", block_state);
+                let block_env = env.child();
+                log::debug!("block environment: {:?}", block_env);
                 for statement in statements {
-                    let result = statement.evaluate(&mut block_state);
-                    if let Err(EvaluateError::Return(value)) = result {
-                        return Ok(value);
-                    }
+                    let result = statement.evaluate(&block_env);
                     last = result?;
                 }
                 Ok(last)
             }
             Statement::If(condition, true_s, false_s) => {
+                log::trace!("if: {} {} {}", condition, true_s, false_s.is_some());
                 let condition = bool::from(condition.evaluate(env)?);
                 if condition {
                     true_s.evaluate(env)
@@ -149,6 +154,7 @@ impl Evaluate for Statement {
                 }
             }
             Statement::While(condition, stmt) => {
+                log::trace!("while: {} {}", condition, stmt);
                 let mut last = Value::Nil;
                 while bool::from(condition.evaluate(env)?) {
                     last = stmt.evaluate(env)?;
@@ -156,27 +162,36 @@ impl Evaluate for Statement {
                 Ok(last)
             }
             Statement::For(init, condition, increment, body) => {
-                let mut for_env = env.child_view();
+                log::trace!("for: {:?} {:?} {:?} {:?}", init, condition, increment, body);
+                let for_env = env.child();
                 let mut last = Value::Nil;
                 if let Some(init) = init {
-                    log::debug!("init: {:?}", init);
-                    init.evaluate(&mut for_env)?;
-                    log::debug!("init environment: {:?}", for_env);
+                    init.evaluate(&for_env)?;
                 }
-                while bool::from(condition.evaluate(&mut for_env)?) {
-                    last = body.evaluate(&mut for_env)?;
-                    log::debug!("after loop environment: {:?}", for_env);
+                while bool::from(condition.evaluate(&for_env)?) {
+                    last = body.evaluate(&for_env)?;
                     if let Some(increment) = increment {
-                        increment.evaluate(&mut for_env)?;
+                        increment.evaluate(&for_env)?;
                     }
-                    log::debug!("increment environment: {:?}", for_env);
                 }
                 Ok(last)
             }
-            Statement::Return(expr) => Err(EvaluateError::Return(expr.evaluate(env)?)),
+            Statement::Return(expr) => {
+                log::trace!("return: {}", expr);
+                Err(EvaluateError::Return(expr.evaluate(env)?))
+            }
             Statement::Function(name, params, body) => {
-                let value = Value::Callable(name.to_string(), params.clone(), body.clone().into());
-                env.define(name, value.clone());
+                log::trace!("function: {}({}) {}", name, params.join(", "), body);
+                let fn_env = env.make_clone();
+                let value = Value::Callable(
+                    name.to_string(),
+                    params.clone(),
+                    body.clone().into(),
+                    fn_env.clone(),
+                );
+                fn_env.declare(name, value.clone());
+                log::debug!("define: {} = {:#?}", name, value);
+                env.set(name, value.clone());
 
                 Ok(value)
             }
@@ -186,9 +201,8 @@ impl Evaluate for Statement {
 
 impl Run for Ast {
     fn run(&self) -> Result<(), Error<'_, Input<'_>>> {
-        let mut env = Environment::new();
-        let mut view = env.view();
-        self.evaluate(&mut view)?;
+        let env = Context::new();
+        self.evaluate(&env)?;
         Ok(())
     }
 }
@@ -212,7 +226,7 @@ impl Statement {
 
     fn function<'s>(input: &mut Input<'s>) -> ModalResult<Statement, Error<'s, Input<'s>>> {
         seq! {
-            _: ("fun", whitespace),
+            _: ("fun", whitespace1),
             alt((Literal::identifier, parse_error("Expect identifier"))),
             _: whitespace,
             delimited(
@@ -354,10 +368,11 @@ impl Statement {
     }
 
     fn return_stmt<'s>(input: &mut Input<'s>) -> ModalResult<Statement, Error<'s, Input<'s>>> {
+        let semicolon =
+            |input: &mut Input<'s>| (whitespace, ";", whitespace).void().parse_next(input);
         seq! {
-            _: ("return", whitespace),
-            opt(Expr::parser),
-            _: (whitespace, alt((";", parse_error("Expect ';'"))), whitespace),
+            _: "return",
+            alt((delimited(whitespace1, Expr::parser, semicolon).map(Some), semicolon.map(|_| None))),
         }
         .map(|(expr,)| Statement::Return(expr.unwrap_or(Expr::Literal(Literal::Nil))))
         .parse_next(input)
@@ -365,8 +380,11 @@ impl Statement {
 
     fn print<'s>(input: &mut Input<'s>) -> ModalResult<Statement, Error<'s, Input<'s>>> {
         delimited(
-            terminated("print", whitespace),
-            alt((Expr::parser, parse_error("expect expression."))),
+            "print",
+            alt((
+                preceded(whitespace1, Expr::parser),
+                parse_error("expect expression."),
+            )),
             (
                 whitespace,
                 alt((";", parse_error("Expect ';'"))),
@@ -391,7 +409,7 @@ mod tests {
     fn test_mul_div() {
         let input = "1 / 2 * 3;";
         let ast = parse(input).unwrap();
-        let res = ast.evaluate(&mut Environment::new().view());
+        let res = ast.evaluate(&Context::new());
         assert!(res.is_ok());
         assert_eq!(res.unwrap(), Value::Number(1.0 / 2.0 * 3.0));
     }
@@ -440,20 +458,18 @@ print true;
                 a + b;
             }
         "#;
-        let mut env = Environment::new();
-        let mut view = env.view();
+        let env = Context::new();
         let ast: Ast = parse(input).unwrap();
-        let res = ast.evaluate(&mut view).unwrap();
+        let res = ast.evaluate(&env).unwrap();
         assert_eq!(res, Value::Number(8.0));
     }
 
     #[test]
     fn test_condition() {
         let input = r#"if (true) {3;} else {4;}"#;
-        let mut env = Environment::new();
-        let mut view = env.view();
+        let env = Context::new();
         let ast: Ast = parse(input).unwrap();
-        let res = ast.evaluate(&mut view).unwrap();
+        let res = ast.evaluate(&env).unwrap();
         assert_eq!(res, Value::Number(3.0));
     }
 
@@ -466,10 +482,12 @@ print true;
             }
             a;
         "#;
-        let mut env = Environment::new();
-        let mut view = env.view();
+        let env = Context::new();
         let ast: Ast = parse(input).unwrap();
-        let res = ast.evaluate(&mut view).unwrap();
+        let res = ast.evaluate(&env).unwrap();
         assert_eq!(res, Value::Number(45.0));
     }
+
+    #[test]
+    fn test_nested_fn() {}
 }

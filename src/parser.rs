@@ -11,7 +11,7 @@ use winnow::{
 
 use crate::{
     error::{Error, EvaluateError, ParseError},
-    interpreter::EnvironmentView,
+    interpreter::Context,
     parser::state::Stateful,
 };
 
@@ -23,9 +23,9 @@ pub type InputStream<'s> = &'s str;
 pub type Input<'s> = Stateful<InputStream<'s>>;
 
 pub trait Evaluate {
-    fn evaluate<'s, 'env>(&'s self, _: &'env mut EnvironmentView) -> Result<Value, EvaluateError>
+    fn evaluate<'s, 'ctx>(&'s self, _: &'ctx Context) -> Result<Value, EvaluateError>
     where
-        's: 'env;
+        's: 'ctx;
 }
 
 pub trait Run {
@@ -68,6 +68,17 @@ pub fn whitespace<'s>(input: &mut Input<'s>) -> ModalResult<(), Error<'s, Input<
     .parse_next(input)
 }
 
+pub fn whitespace1<'s>(input: &mut Input<'s>) -> ModalResult<(), Error<'s, Input<'s>>> {
+    trace(
+        "tracking_multispace",
+        repeat::<_, _, (), _, _>(
+            1..,
+            alt((one_of([' ', '\t', '\r']).void(), comment, tracking_new_line)),
+        ),
+    )
+    .parse_next(input)
+}
+
 pub fn parse_error<'s, Output>(
     msg: &'static str,
 ) -> impl Parser<Input<'s>, Output, ErrMode<Error<'s, Input<'s>>>> {
@@ -88,7 +99,7 @@ pub enum Value {
     Number(f64),
     String(String),
     NativeCallable(usize, Arc<dyn Fn(Vec<Value>) -> Value>),
-    Callable(String, Vec<String>, Arc<Statement>),
+    Callable(String, Vec<String>, Arc<Statement>, Context),
 }
 
 impl std::fmt::Debug for Value {
@@ -98,13 +109,8 @@ impl std::fmt::Debug for Value {
             Self::Bool(b) => write!(f, "{b}"),
             Self::Number(n) => f.debug_tuple("Number").field(n).finish(),
             Self::String(s) => f.debug_tuple("String").field(s).finish(),
-            Self::NativeCallable(i, _) => write!(f, "<native fn({i} args)>"),
-            Self::Callable(name, args, stmt) => f
-                .debug_struct("Callable")
-                .field("name", name)
-                .field("args", args)
-                .field("body", stmt)
-                .finish(),
+            Self::NativeCallable(i, _fn) => write!(f, "<native fn({i} args)>"),
+            Self::Callable(name, _args, _stmt, _env) => write!(f, "<fn {name}>"),
         }
     }
 }
@@ -116,9 +122,10 @@ impl PartialEq for Value {
             (Self::Bool(l), Self::Bool(r)) => l == r,
             (Self::Number(l), Self::Number(r)) => l == r,
             (Self::String(l), Self::String(r)) => l == r,
-            (Self::Callable(l_name, l_args, l_stmt), Self::Callable(r_name, r_args, r_stmt)) => {
-                l_args == r_args && l_stmt == r_stmt && l_name == r_name
-            }
+            (
+                Self::Callable(l_name, l_args, l_stmt, _l_env),
+                Self::Callable(r_name, r_args, r_stmt, _r_env),
+            ) => l_args == r_args && l_stmt == r_stmt && l_name == r_name,
             (Self::NativeCallable(_, _), Self::NativeCallable(_, _)) => false,
             _ => core::mem::discriminant(self) == core::mem::discriminant(other),
         }
@@ -133,7 +140,7 @@ impl std::fmt::Display for Value {
             Self::Number(n) => write!(f, "{n}"),
             Self::String(s) => write!(f, "{s}"),
             Self::NativeCallable(n, _) => write!(f, "<native fn({n} args)>"),
-            Self::Callable(name, _, _) => {
+            Self::Callable(name, _args, _stmt, _env) => {
                 write!(f, "<fn {name}>")
             }
         }
