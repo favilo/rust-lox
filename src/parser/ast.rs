@@ -223,7 +223,7 @@ impl Statement {
 
         let rest: Vec<String> = trace(
             "rest of arguments",
-            repeat(0.., preceded((whitespace, ","), Literal::identifier)),
+            repeat(0.., preceded((whitespace, ",", whitespace), Literal::identifier)),
         )
         .parse_next(input)?;
         Ok(once(head).chain(rest).collect::<Vec<String>>())
