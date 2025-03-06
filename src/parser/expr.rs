@@ -16,7 +16,7 @@ use crate::{
     parser::state::{State, Stateful},
 };
 
-use super::{parse_error, whitespace, Evaluate, Input};
+use super::{parse_error, whitespace, Evaluate, Input, Value};
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Expr {
@@ -29,10 +29,7 @@ pub enum Expr {
 }
 
 impl Evaluate for Expr {
-    fn evaluate<'s, 'env>(
-        &'s self,
-        env: &'env mut EnvironmentView,
-    ) -> Result<Literal, Error<'s, Input<'s>>>
+    fn evaluate<'s, 'env>(&'s self, env: &'env mut EnvironmentView) -> Result<Value, EvaluateError>
     where
         's: 'env,
     {
@@ -53,17 +50,33 @@ impl Evaluate for Expr {
                     .collect::<Result<Vec<_>, _>>()?;
                 let callable = expr.evaluate(env)?;
                 match callable {
-                    Literal::NativeCallable(n, f) => {
+                    Value::NativeCallable(n, f) => {
                         // TODO: Add currying
                         if n != args.len() {
-                            return Err(Error::from(EvaluateError::ArgumentMismatch {
+                            return Err(EvaluateError::ArgumentMismatch {
                                 expected: n,
                                 got: args.len(),
-                            }));
+                            });
                         }
                         Ok(f(args))
                     }
-                    _ => Err(Error::from(EvaluateError::NotCallable(callable))),
+                    Value::Callable(_name, names, stmt) => {
+                        // TODO: Add currying
+                        if names.len() != args.len() {
+                            return Err(EvaluateError::ArgumentMismatch {
+                                expected: names.len(),
+                                got: args.len(),
+                            });
+                        }
+                        let mut fn_env = env.child_view();
+                        for (name, value) in names.iter().zip(args.iter()) {
+                            fn_env.define(name, value.clone());
+                        }
+                        let stmt = Arc::unwrap_or_clone(stmt);
+                        let value = stmt.evaluate(&mut fn_env)?.clone();
+                        Ok(value)
+                    }
+                    _ => Err(EvaluateError::NotCallable(callable)),
                 }
             }
         }
@@ -347,28 +360,23 @@ pub enum Unary {
 }
 
 impl Evaluate for Unary {
-    fn evaluate<'s, 'env>(
-        &'s self,
-        env: &'env mut EnvironmentView,
-    ) -> Result<Literal, Error<'s, Input<'s>>>
+    fn evaluate<'s, 'env>(&'s self, env: &'env mut EnvironmentView) -> Result<Value, EvaluateError>
     where
         's: 'env,
     {
         match self {
             Self::Negate(e) => Ok(match e.evaluate(env)? {
-                Literal::Number(n) => Literal::Number(-n),
+                Value::Number(n) => Value::Number(-n),
                 _ => {
-                    return Err(Error::from(EvaluateError::TypeMismatch {
+                    return Err(EvaluateError::TypeMismatch {
                         expected: "number".into(),
-                    }))
+                    })
                 }
             }),
             Self::Not(e) => Ok(match e.evaluate(env)? {
-                Literal::Nil => Literal::True,
-                Literal::True => Literal::False,
-                Literal::False => Literal::True,
-                Literal::Number(_) => Literal::False,
-                _ => todo!(),
+                Value::Nil => Value::Bool(true),
+                Value::Bool(b) => Value::Bool(!b),
+                _ => Value::Bool(false),
             }),
         }
     }
@@ -400,94 +408,91 @@ pub enum Binary {
 }
 
 impl Evaluate for Binary {
-    fn evaluate<'s, 'env>(
-        &'s self,
-        env: &'env mut EnvironmentView,
-    ) -> Result<Literal, Error<'s, Input<'s>>>
+    fn evaluate<'s, 'env>(&'s self, env: &'env mut EnvironmentView) -> Result<Value, EvaluateError>
     where
         's: 'env,
     {
         match self {
             Self::Mul(l, r) => Ok(match (l.evaluate(env)?, r.evaluate(env)?) {
-                (Literal::Number(l), Literal::Number(r)) => Literal::from(l * r),
+                (Value::Number(l), Value::Number(r)) => Value::from(l * r),
                 _ => {
-                    return Err(Error::from(EvaluateError::TypeMismatch {
+                    return Err(EvaluateError::TypeMismatch {
                         expected: "numbers".into(),
-                    }))
+                    })
                 }
             }),
             Self::Div(l, r) => Ok(match (l.evaluate(env)?, r.evaluate(env)?) {
-                (Literal::Number(l), Literal::Number(r)) => Literal::from(l / r),
+                (Value::Number(l), Value::Number(r)) => Value::from(l / r),
                 _ => {
-                    return Err(Error::from(EvaluateError::TypeMismatch {
+                    return Err(EvaluateError::TypeMismatch {
                         expected: "numbers".into(),
-                    }))
+                    })
                 }
             }),
             Self::Add(l, r) => Ok(match (l.evaluate(env)?, r.evaluate(env)?) {
-                (Literal::Number(l), Literal::Number(r)) => Literal::from(l + r),
-                (Literal::String(s), Literal::String(t)) => Literal::from(format!("{}{}", s, t)),
+                (Value::Number(l), Value::Number(r)) => Value::from(l + r),
+                (Value::String(s), Value::String(t)) => Value::from(format!("{}{}", s, t)),
                 _ => {
-                    return Err(Error::from(EvaluateError::TypeMismatch {
+                    return Err(EvaluateError::TypeMismatch {
                         expected: "two numbers or two strings".into(),
-                    }))
+                    })
                 }
             }),
             Self::Sub(l, r) => Ok(match (l.evaluate(env)?, r.evaluate(env)?) {
-                (Literal::Number(l), Literal::Number(r)) => Literal::from(l - r),
+                (Value::Number(l), Value::Number(r)) => Value::from(l - r),
                 _ => {
-                    return Err(Error::from(EvaluateError::TypeMismatch {
+                    return Err(EvaluateError::TypeMismatch {
                         expected: "numbers".into(),
-                    }))
+                    })
                 }
             }),
             Self::LessThan(l, r) => Ok(match (l.evaluate(env)?, r.evaluate(env)?) {
-                (Literal::Number(l), Literal::Number(r)) => Literal::from(l < r),
+                (Value::Number(l), Value::Number(r)) => Value::from(l < r),
                 _ => {
-                    return Err(Error::from(EvaluateError::TypeMismatch {
+                    return Err(EvaluateError::TypeMismatch {
                         expected: "numbers".into(),
-                    }))
+                    })
                 }
             }),
             Self::GreaterThan(l, r) => Ok(match (l.evaluate(env)?, r.evaluate(env)?) {
-                (Literal::Number(l), Literal::Number(r)) => Literal::from(l > r),
+                (Value::Number(l), Value::Number(r)) => Value::from(l > r),
                 _ => {
-                    return Err(Error::from(EvaluateError::TypeMismatch {
+                    return Err(EvaluateError::TypeMismatch {
                         expected: "numbers".into(),
-                    }))
+                    })
                 }
             }),
             Self::LessEq(l, r) => Ok(match (l.evaluate(env)?, r.evaluate(env)?) {
-                (Literal::Number(l), Literal::Number(r)) => Literal::from(l <= r),
+                (Value::Number(l), Value::Number(r)) => Value::from(l <= r),
                 _ => {
-                    return Err(Error::from(EvaluateError::TypeMismatch {
+                    return Err(EvaluateError::TypeMismatch {
                         expected: "numbers".into(),
-                    }))
+                    })
                 }
             }),
             Self::GreaterEq(l, r) => Ok(match (l.evaluate(env)?, r.evaluate(env)?) {
-                (Literal::Number(l), Literal::Number(r)) => Literal::from(l >= r),
+                (Value::Number(l), Value::Number(r)) => Value::from(l >= r),
                 _ => {
-                    return Err(Error::from(EvaluateError::TypeMismatch {
+                    return Err(EvaluateError::TypeMismatch {
                         expected: "numbers".into(),
-                    }))
+                    })
                 }
             }),
             Self::Equals(l, r) => Ok(match (l.evaluate(env)?, r.evaluate(env)?) {
-                (Literal::Number(l), Literal::Number(r)) => Literal::from(l == r),
-                (Literal::String(s), Literal::String(t)) => Literal::from(s == t),
-                (Literal::Nil, Literal::Nil) => Literal::True,
-                (Literal::True, Literal::True) => Literal::True,
-                (Literal::False, Literal::False) => Literal::True,
-                _ => Literal::False,
+                (Value::Number(l), Value::Number(r)) => Value::from(l == r),
+                (Value::String(s), Value::String(t)) => Value::from(s == t),
+                (Value::Nil, Value::Nil) => Value::Bool(true),
+                (Value::Bool(true), Value::Bool(true)) => Value::Bool(true),
+                (Value::Bool(false), Value::Bool(false)) => Value::Bool(true),
+                _ => Value::Bool(false),
             }),
             Self::NotEquals(l, r) => Ok(match (l.evaluate(env)?, r.evaluate(env)?) {
-                (Literal::Number(l), Literal::Number(r)) => Literal::from(l != r),
-                (Literal::String(s), Literal::String(t)) => Literal::from(s != t),
-                (Literal::Nil, Literal::Nil) => Literal::False,
-                (Literal::True, Literal::True) => Literal::False,
-                (Literal::False, Literal::False) => Literal::False,
-                _ => Literal::True,
+                (Value::Number(l), Value::Number(r)) => Value::from(l != r),
+                (Value::String(s), Value::String(t)) => Value::from(s != t),
+                (Value::Nil, Value::Nil) => Value::Bool(false),
+                (Value::Bool(true), Value::Bool(true)) => Value::Bool(false),
+                (Value::Bool(false), Value::Bool(false)) => Value::Bool(false),
+                _ => Value::Bool(true),
             }),
             Self::Or(l, r) => {
                 let a = l.evaluate(env)?;
@@ -542,7 +547,6 @@ pub enum Literal {
     Number(f64),
     String(String),
     Id(String),
-    NativeCallable(usize, Arc<dyn Fn(Vec<Literal>) -> Literal>),
 }
 
 impl std::fmt::Debug for Literal {
@@ -554,7 +558,6 @@ impl std::fmt::Debug for Literal {
             Self::Number(n) => f.debug_tuple("Number").field(n).finish(),
             Self::String(s) => f.debug_tuple("String").field(s).finish(),
             Self::Id(id) => f.debug_tuple("Id").field(id).finish(),
-            Self::NativeCallable(i, _) => write!(f, "<native fn({i} args)>"),
         }
     }
 }
@@ -565,7 +568,6 @@ impl PartialEq for Literal {
             (Self::Number(l0), Self::Number(r0)) => l0 == r0,
             (Self::String(l0), Self::String(r0)) => l0 == r0,
             (Self::Id(l0), Self::Id(r0)) => l0 == r0,
-            (Self::NativeCallable(_, _), Self::NativeCallable(_, _)) => false,
             _ => core::mem::discriminant(self) == core::mem::discriminant(other),
         }
     }
@@ -624,24 +626,22 @@ impl From<&Literal> for bool {
 }
 
 impl Evaluate for Literal {
-    fn evaluate<'s, 'env>(
-        &'s self,
-        env: &'env mut EnvironmentView,
-    ) -> Result<Literal, Error<'s, Input<'s>>>
+    fn evaluate<'s, 'env>(&'s self, env: &'env mut EnvironmentView) -> Result<Value, EvaluateError>
     where
         's: 'env,
     {
-        match self {
+        Ok(match self {
             Self::Id(s) => env
                 .get(s)
                 .cloned()
-                .ok_or_else(|| Error::from(EvaluateError::UndefinedVariable(s.clone()))),
+                .ok_or_else(|| EvaluateError::UndefinedVariable(s.clone()))?,
             // TODO: might change how we handle literals that are functions.
-            Self::NativeCallable(_, _) => Ok(self.clone()),
-            Self::Nil | Self::Number(_) | Self::String(_) | Self::True | Self::False => {
-                Ok(self.clone())
-            }
-        }
+            Self::Nil => Value::Nil,
+            Self::True => Value::Bool(true),
+            Self::False => Value::Bool(false),
+            Self::Number(n) => Value::Number(*n),
+            Self::String(s) => Value::String(s.clone()),
+        })
     }
 }
 
@@ -766,7 +766,6 @@ impl std::fmt::Display for Literal {
             Self::Number(n) => write!(f, "{n}"),
             Self::String(s) => write!(f, "{s}"),
             Self::Id(s) => write!(f, "{s}"),
-            Self::NativeCallable(n, _) => write!(f, "<native fn({n} args)>"),
         }
     }
 }

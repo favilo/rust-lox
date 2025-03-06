@@ -5,7 +5,7 @@ use winnow::{
     stream::Stream,
 };
 
-use crate::parser::{expr::Literal, Input};
+use crate::parser::{Input, Value};
 
 #[derive(Debug)]
 pub enum Error<'s, S: Stream> {
@@ -142,7 +142,7 @@ pub enum EvaluateError {
     UndefinedVariable(String),
     ReservedWord(String),
     ArgumentMismatch { expected: usize, got: usize },
-    NotCallable(Literal),
+    NotCallable(Value),
 }
 
 impl From<EvaluateError> for Error<'_, Input<'_>> {

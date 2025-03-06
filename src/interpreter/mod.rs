@@ -1,10 +1,10 @@
 use std::{collections::HashMap, sync::Arc, time::UNIX_EPOCH};
 
-use crate::parser::expr::Literal;
+use crate::parser::Value;
 
 #[derive(Debug, Default, Clone)]
 pub struct Environment {
-    environments: Vec<HashMap<String, Literal>>,
+    environments: Vec<HashMap<String, Value>>,
 }
 
 impl Environment {
@@ -12,9 +12,9 @@ impl Environment {
         let mut globals = HashMap::default();
         globals.insert(
             "clock".into(),
-            Literal::NativeCallable(
+            Value::NativeCallable(
                 0,
-                Arc::new(|_| Literal::from(UNIX_EPOCH.elapsed().unwrap().as_secs_f64())),
+                Arc::new(|_| Value::from(UNIX_EPOCH.elapsed().unwrap().as_secs_f64())),
             ),
         );
         Self {
@@ -26,22 +26,18 @@ impl Environment {
         EnvironmentView { state: self }
     }
 
-    pub fn get(&self, name: &str) -> Option<&Literal> {
+    pub fn get(&self, name: &str) -> Option<&Value> {
         self.environments.iter().rev().find_map(|env| env.get(name))
     }
 
-    pub fn define(&mut self, name: &str, value: Literal) {
-        assert!(!matches!(&value, Literal::Id(_)));
-
+    pub fn define(&mut self, name: &str, value: Value) {
         self.environments
             .last_mut()
             .expect("always have one environment")
             .insert(name.to_string(), value);
     }
 
-    pub fn set(&mut self, name: &str, value: Literal) {
-        assert!(!matches!(&value, Literal::Id(_)));
-
+    pub fn set(&mut self, name: &str, value: Value) {
         let (last, rest) = self
             .environments
             .split_last_mut()
@@ -76,15 +72,15 @@ impl EnvironmentView<'_> {
         EnvironmentView { state: self.state }
     }
 
-    pub fn get(&self, name: &str) -> Option<&Literal> {
+    pub fn get(&self, name: &str) -> Option<&Value> {
         self.state.get(name)
     }
 
-    pub fn define(&mut self, name: &str, value: Literal) {
+    pub fn define(&mut self, name: &str, value: Value) {
         self.state.define(name, value);
     }
 
-    pub fn set(&mut self, name: &str, value: Literal) {
+    pub fn set(&mut self, name: &str, value: Value) {
         self.state.set(name, value);
     }
 }

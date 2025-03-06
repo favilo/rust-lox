@@ -9,7 +9,7 @@ use winnow::{
 };
 
 #[derive(Debug, Clone, Copy, Default, Eq, PartialEq)]
-pub(crate) struct Stateful<S> {
+pub struct Stateful<S> {
     input: S,
     pub(crate) state: State,
 }
@@ -125,7 +125,7 @@ impl<I: Stream> Stream for Stateful<I> {
     }
 }
 
-pub(crate) struct StateCheckpoint<C, S> {
+pub struct StateCheckpoint<C, S> {
     inner: C,
     state: State,
     stream: core::marker::PhantomData<S>,
