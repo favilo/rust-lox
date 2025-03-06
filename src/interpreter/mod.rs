@@ -12,6 +12,7 @@ impl Context {
         Self {
             env: Rc::new(RefCell::new(Environment::new())),
         }
+        .child()
     }
 
     pub fn get(&self, name: &str) -> Option<Value> {

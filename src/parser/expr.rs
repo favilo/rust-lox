@@ -719,11 +719,9 @@ impl Literal {
         .parse_next(input)
     }
 
-    pub(crate) fn identifier<'s>(
-        input: &mut Input<'s>,
-    ) -> ModalResult<String, Error<'s, Input<'s>>> {
-        let id = trace(
-            "identifier",
+    pub(crate) fn word<'s>(input: &mut Input<'s>) -> ModalResult<String, Error<'s, Input<'s>>> {
+        trace(
+            "word",
             (
                 any.verify(|c: &<Input as Stream>::Token| {
                     let c = c.as_char();
@@ -733,11 +731,17 @@ impl Literal {
                     let c = c.as_char();
                     c.is_alphanumeric() || c == '_'
                 }),
-            ),
+            )
+                .take()
+                .map(ToString::to_string),
         )
-        .take()
-        .map(ToString::to_string)
-        .parse_next(input)?;
+        .parse_next(input)
+    }
+
+    pub(crate) fn identifier<'s>(
+        input: &mut Input<'s>,
+    ) -> ModalResult<String, Error<'s, Input<'s>>> {
+        let id = trace("identifier", Self::word).parse_next(input)?;
         if matches!(
             id.as_ref(),
             "and"

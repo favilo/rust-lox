@@ -1,12 +1,15 @@
 use std::iter::once;
 
 use winnow::{
-    combinator::{alt, delimited, opt, preceded, repeat, terminated, trace},
-    seq, ModalResult, Parser,
+    combinator::{alt, backtrack_err, delimited, opt, preceded, repeat, terminated, trace},
+    error::ErrMode,
+    seq,
+    stream::Stream,
+    ModalResult, Parser,
 };
 
 use crate::{
-    error::{Error, EvaluateError},
+    error::{Error, EvaluateError, ParseError},
     interpreter::Context,
     parser::whitespace1,
 };
@@ -181,17 +184,16 @@ impl Evaluate for Statement {
                 Err(EvaluateError::Return(expr.evaluate(env)?))
             }
             Statement::Function(name, params, body) => {
-                log::trace!("function: {}({}) {}", name, params.join(", "), body);
-                let fn_env = env.make_clone();
+                log::trace!("function: {name}({}) {body}", params.join(", "));
                 let value = Value::Callable(
                     name.to_string(),
                     params.clone(),
                     body.clone().into(),
-                    fn_env.clone(),
+                    env.child(),
                 );
-                fn_env.declare(name, value.clone());
-                log::debug!("define: {} = {:#?}", name, value);
+                log::debug!("define: {name} = {value:#?}");
                 env.set(name, value.clone());
+                log::debug!("function definition global env: {env:?}");
 
                 Ok(value)
             }
@@ -379,19 +381,20 @@ impl Statement {
     }
 
     fn print<'s>(input: &mut Input<'s>) -> ModalResult<Statement, Error<'s, Input<'s>>> {
-        delimited(
-            "print",
-            alt((
-                preceded(whitespace1, Expr::parser),
-                parse_error("expect expression."),
-            )),
+        let semicolon = |input: &mut Input<'s>| {
             (
                 whitespace,
-                alt((";", parse_error("Expect ';'"))),
+                alt((";", parse_error("expect expression"))),
                 whitespace,
-            ),
-        )
-        .map(Statement::Print)
+            )
+                .void()
+                .parse_next(input)
+        };
+        seq! {
+            _: (Literal::word.verify(|id: <Input as Stream>::Slice| id == "print"), whitespace),
+            terminated(alt((Expr::parser, parse_error("expect expression."))), semicolon),
+        }
+        .map(|(expr,)| Statement::Print(expr))
         .parse_next(input)
     }
 }
@@ -431,6 +434,16 @@ mod tests {
             ast.unwrap_err().to_string(),
             "[line 1] Error at ';': expect expression."
         );
+    }
+
+    #[test]
+    fn test_print_not_keyword() {
+        let input = "
+            fun printAndModify() {}
+            printAndModify();";
+        let ast = parse(input).unwrap();
+        let res = ast.run();
+        assert!(res.is_ok());
     }
 
     #[test]
@@ -489,5 +502,18 @@ print true;
     }
 
     #[test]
-    fn test_nested_fn() {}
+    fn test_nested_fn() {
+        let input = r#"
+            fun fib(n) {
+              if (n < 2) return n;
+              return fib(n - 2) + fib(n - 1);
+            }
+            fib(10);
+        "#;
+
+        let env = Context::new();
+        let ast: Ast = parse(input).unwrap();
+        let res = ast.evaluate(&env).unwrap();
+        assert_eq!(res, Value::Number(55.0));
+    }
 }

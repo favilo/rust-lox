@@ -1,9 +1,13 @@
-// This program computes the 35th Fibonacci number
-fun fib(n) {
-  if (n < 2) return n;
-  return fib(n - 2) + fib(n - 1);
+// This program demonstrates global and local variable shadowing in Lox.
+var a = 90;
+
+fun printAndModify() {
+  print a;
+  var a = 43;
+  print a;
 }
 
-var start = clock();
-print fib(10) == 55;
-print (clock() - start) < 5; // 5 seconds
+print a;
+var a = 60;
+print printAndModify;
+printAndModify();
