@@ -41,6 +41,7 @@ pub enum Statement {
     While(Expr, Box<Statement>),
     For(Option<Box<Statement>>, Expr, Option<Expr>, Box<Statement>),
     Function(String, Vec<String>, Box<Statement>),
+    Return(Expr),
 }
 
 impl std::fmt::Display for Statement {
@@ -83,6 +84,7 @@ impl std::fmt::Display for Statement {
             Statement::Function(name, params, body) => {
                 write!(f, "fun {}({}) {}", name, params.join(", "), body)
             }
+            Statement::Return(expr) => write!(f, "return {};", expr),
         }
     }
 }
@@ -94,7 +96,11 @@ impl Evaluate for Ast {
     {
         let mut last = Value::Nil;
         for statement in &self.statements {
-            last = statement.evaluate(env)?;
+            let result = statement.evaluate(env);
+            if let Err(EvaluateError::Return(value)) = result {
+                return Ok(value);
+            }
+            last = result?;
         }
 
         Ok(last)
@@ -124,7 +130,11 @@ impl Evaluate for Statement {
                 let mut block_state = env.child_view();
                 log::debug!("block environment: {:?}", block_state);
                 for statement in statements {
-                    last = statement.evaluate(&mut block_state)?;
+                    let result = statement.evaluate(&mut block_state);
+                    if let Err(EvaluateError::Return(value)) = result {
+                        return Ok(value);
+                    }
+                    last = result?;
                 }
                 Ok(last)
             }
@@ -163,6 +173,7 @@ impl Evaluate for Statement {
                 }
                 Ok(last)
             }
+            Statement::Return(expr) => Err(EvaluateError::Return(expr.evaluate(env)?)),
             Statement::Function(name, params, body) => {
                 let value = Value::Callable(name.to_string(), params.clone(), body.clone().into());
                 env.define(name, value.clone());
@@ -223,7 +234,10 @@ impl Statement {
 
         let rest: Vec<String> = trace(
             "rest of arguments",
-            repeat(0.., preceded((whitespace, ",", whitespace), Literal::identifier)),
+            repeat(
+                0..,
+                preceded((whitespace, ",", whitespace), Literal::identifier),
+            ),
         )
         .parse_next(input)?;
         Ok(once(head).chain(rest).collect::<Vec<String>>())
@@ -237,6 +251,7 @@ impl Statement {
                 Self::while_loop,
                 Self::for_loop,
                 Self::print,
+                Self::return_stmt,
                 Self::expr_stmt,
             )),
             whitespace,
@@ -335,6 +350,16 @@ impl Statement {
                 whitespace,
             ),
         )
+        .parse_next(input)
+    }
+
+    fn return_stmt<'s>(input: &mut Input<'s>) -> ModalResult<Statement, Error<'s, Input<'s>>> {
+        seq! {
+            _: ("return", whitespace),
+            opt(Expr::parser),
+            _: (whitespace, alt((";", parse_error("Expect ';'"))), whitespace),
+        }
+        .map(|(expr,)| Statement::Return(expr.unwrap_or(Expr::Literal(Literal::Nil))))
         .parse_next(input)
     }
 

@@ -1,3 +1,4 @@
 // This function takes three arguments and prints their sum
-fun f3(a, b, c) { print a + b + c; }
-f3(41, 41, 41);
+fun f3(a, b, c) { return 4; }
+v = f3(41, 41, 41);
+print v;

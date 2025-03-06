@@ -143,6 +143,7 @@ pub enum EvaluateError {
     ReservedWord(String),
     ArgumentMismatch { expected: usize, got: usize },
     NotCallable(Value),
+    Return(Value),
 }
 
 impl From<EvaluateError> for Error<'_, Input<'_>> {
@@ -160,7 +161,8 @@ impl Display for EvaluateError {
             Self::ArgumentMismatch { expected, got } => {
                 write!(f, "Agrument mismatch: expected {expected}, found {got}.")
             }
-            Self::NotCallable(l) => write!(f, "Expected callable, found {l:?}."),
+            Self::NotCallable(v) => write!(f, "Expected callable, found {v:?}."),
+            Self::Return(v) => write!(f, "Returned value: {v}."),
         }
     }
 }
