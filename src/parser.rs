@@ -10,7 +10,7 @@ use winnow::{
 };
 
 use crate::{
-    error::{Error, EvaluateError, ParseError},
+    error::{Error, EvaluateError, ParseError, ParseErrorType},
     interpreter::Context,
     parser::state::Stateful,
 };
@@ -80,13 +80,13 @@ pub fn whitespace1<'s>(input: &mut Input<'s>) -> ModalResult<(), Error<'s, Input
 }
 
 pub fn parse_error<'s, Output>(
-    msg: &'static str,
+    ty: ParseErrorType,
 ) -> impl Parser<Input<'s>, Output, ErrMode<Error<'s, Input<'s>>>> {
     trace("parse_error", move |input: &mut Input<'s>| {
         whitespace.parse_next(input)?;
         Err(ErrMode::Cut(Error::Parse(ParseError::new(
-            msg.to_string(),
-            *input,
+            ty.clone(),
+            input.clone(),
         ))))
     })
 }

@@ -8,14 +8,13 @@ use winnow::{
     combinator::{alt, cut_err, delimited, empty, fail, opt, preceded, repeat, terminated, trace},
     dispatch,
     error::{ErrMode, ParserError},
-    seq,
     stream::{AsBStr, AsChar, Compare, ParseSlice, Stream, StreamIsPartial},
     token::{any, one_of, take_till, take_while},
     ModalResult, Parser,
 };
 
 use crate::{
-    error::{Error, EvaluateError},
+    error::{Error, EvaluateError, ParseErrorType},
     interpreter::Context,
     parser::state::{State, Stateful},
 };
@@ -25,10 +24,11 @@ use super::{parse_error, whitespace, Evaluate, Input, Value};
 #[derive(Debug, Clone, PartialEq)]
 pub enum Expr {
     Literal(Literal),
+    Variable(String, Option<usize>),
     Group(Box<Expr>),
     Unary(Unary),
     Binary(Binary),
-    Assignment(String, Box<Expr>),
+    Assignment(String, Option<usize>, Box<Expr>),
     FnCall(Box<Expr>, Vec<Expr>),
 }
 
@@ -39,12 +39,17 @@ impl Evaluate for Expr {
     {
         match self {
             Self::Literal(l) => l.evaluate(env),
+            Self::Variable(v, depth) => {
+                log::trace!("Getting variable [{v}] with depth {depth:?}");
+                env.get(v, *depth)
+            }
             Self::Group(e) => e.evaluate(env),
             Self::Unary(u) => u.evaluate(env),
             Self::Binary(b) => b.evaluate(env),
-            Self::Assignment(id, e) => {
+            Self::Assignment(id, depth, e) => {
                 let value = e.evaluate(env)?;
-                env.set(id, value.clone());
+                log::trace!("Setting variable [{id}] to {value} with depth {depth:?}");
+                env.set(id, value.clone(), *depth)?;
                 Ok(value)
             }
             Self::FnCall(expr, args) => {
@@ -76,8 +81,8 @@ impl Evaluate for Expr {
                         }
                         let fn_env = parent_env.child();
                         zip(names.iter(), args.iter())
-                            .for_each(|(name, arg)| fn_env.declare(name, arg.clone()));
-                        log::debug!("Function env: {fn_env:#?}");
+                            .for_each(|(name, arg)| fn_env.declare(name, arg.clone(), Some(0)));
+                        log::trace!("Function env: {fn_env:#?}");
                         let stmt = Arc::unwrap_or_clone(stmt);
                         let result = stmt.evaluate(&fn_env);
                         if let Err(EvaluateError::Return(n)) = result {
@@ -98,10 +103,11 @@ impl std::fmt::Display for Expr {
         match self {
             Self::Literal(Literal::Number(n)) => write!(f, "{:?}", n),
             Self::Literal(l) => write!(f, "{}", l),
+            Self::Variable(v, _scope) => write!(f, "{}", v),
             Self::Unary(u) => write!(f, "{}", u),
             Self::Binary(b) => write!(f, "{}", b),
             Self::Group(e) => write!(f, "(group {})", e),
-            Self::Assignment(id, e) => write!(f, "(= {} {})", id, e),
+            Self::Assignment(id, _depth, e) => write!(f, "(= {} {})", id, e),
             Self::FnCall(expr, args) => {
                 write!(
                     f,
@@ -128,9 +134,11 @@ impl Expr {
     }
 
     pub fn assignment<'s>(input: &mut Input<'s>) -> ModalResult<Expr, Error<'s, Input<'s>>> {
-        seq!(Literal::identifier, _: whitespace, _: "=", _: whitespace, Expr::parser)
-            .map(|(id, e)| Expr::Assignment(id, Box::new(e)))
-            .parse_next(input)
+        let name = terminated(Self::identifier, (whitespace, "=", whitespace)).parse_next(input)?;
+        let e = Expr::parser.parse_next(input)?;
+        let depth = input.state.depth(&name);
+        log::debug!("Assigning to variable [{name}] with depth {depth:?}");
+        Ok(Expr::Assignment(name, depth, Box::new(e)))
     }
 
     pub fn logical_or<'s>(input: &mut Input<'s>) -> ModalResult<Expr, Error<'s, Input<'s>>> {
@@ -142,7 +150,10 @@ impl Expr {
                 0..,
                 (
                     "or",
-                    alt((Expr::logical_and, parse_error("Expect expression."))),
+                    alt((
+                        Expr::logical_and,
+                        parse_error(ParseErrorType::Expected("expression")),
+                    )),
                 ),
             )
             .fold(
@@ -164,7 +175,10 @@ impl Expr {
                 0..,
                 (
                     "and",
-                    alt((Expr::equality, parse_error("Expect expression."))),
+                    alt((
+                        Expr::equality,
+                        parse_error(ParseErrorType::Expected("expression")),
+                    )),
                 ),
             )
             .fold(
@@ -186,7 +200,10 @@ impl Expr {
                 0..,
                 (
                     alt(("==", "!=")),
-                    alt((Expr::comparison, parse_error("Expect expression."))),
+                    alt((
+                        Expr::comparison,
+                        parse_error(ParseErrorType::Expected("expression")),
+                    )),
                 ),
             )
             .fold(
@@ -210,7 +227,10 @@ impl Expr {
                 0..,
                 (
                     alt(("<=", ">=", "<", ">")),
-                    alt((Expr::term, parse_error("Expect expression."))),
+                    alt((
+                        Expr::term,
+                        parse_error(ParseErrorType::Expected("expression")),
+                    )),
                 ),
             )
             .fold(
@@ -236,7 +256,10 @@ impl Expr {
                 0..,
                 (
                     one_of(['+', '-']),
-                    alt((Expr::factor, parse_error("Expect expression."))),
+                    alt((
+                        Expr::factor,
+                        parse_error(ParseErrorType::Expected("expression")),
+                    )),
                 ),
             )
             .fold(
@@ -260,7 +283,10 @@ impl Expr {
                 0..,
                 (
                     one_of(['*', '/']),
-                    alt((Expr::unary, parse_error("Expect expression."))),
+                    alt((
+                        Expr::unary,
+                        parse_error(ParseErrorType::Expected("expression")),
+                    )),
                 ),
             )
             .fold(
@@ -339,7 +365,11 @@ impl Expr {
             "primary",
             delimited(
                 whitespace,
-                alt((Expr::parenthesis, Literal::parser.map(Expr::Literal))),
+                alt((
+                    Expr::parenthesis,
+                    Self::variable,
+                    Literal::parser.map(Expr::Literal),
+                )),
                 whitespace,
             ),
         )
@@ -354,12 +384,70 @@ impl Expr {
                 delimited(
                     whitespace,
                     terminated(Self::parser, whitespace),
-                    alt((")", parse_error("Expect expression."))),
+                    alt((")", parse_error(ParseErrorType::Expected("expression")))),
                 ),
             ),
         )
         .map(|e| Self::Group(Box::new(e)))
         .parse_next(input)
+    }
+
+    pub(crate) fn word<'s>(input: &mut Input<'s>) -> ModalResult<String, Error<'s, Input<'s>>> {
+        trace(
+            "word",
+            (
+                any.verify(|c: &<Input as Stream>::Token| {
+                    let c = c.as_char();
+                    c.is_alphabetic() || c == '_'
+                }),
+                take_while(0.., |c: <Input as Stream>::Token| {
+                    let c = c.as_char();
+                    c.is_alphanumeric() || c == '_'
+                }),
+            )
+                .take()
+                .map(ToString::to_string),
+        )
+        .parse_next(input)
+    }
+
+    fn variable<'s>(input: &mut Input<'s>) -> ModalResult<Expr, Error<'s, Input<'s>>> {
+        let name = Self::identifier.parse_next(input)?;
+        let depth = input.state.depth(&name);
+        log::debug!("Found variable [{name}] with depth {depth:?}");
+
+        Ok(Expr::Variable(name, depth))
+    }
+
+    pub(crate) fn identifier<'s>(
+        input: &mut Input<'s>,
+    ) -> ModalResult<String, Error<'s, Input<'s>>> {
+        let id = trace("identifier", Self::word).parse_next(input)?;
+        if matches!(
+            id.as_ref(),
+            "and"
+                | "class"
+                | "else"
+                | "false"
+                | "for"
+                | "fun"
+                | "if"
+                | "nil"
+                | "or"
+                | "print"
+                | "return"
+                | "super"
+                | "this"
+                | "true"
+                | "var"
+                | "while"
+        ) {
+            Err(ErrMode::Backtrack(Error::from(
+                EvaluateError::ReservedWord(id),
+            )))
+        } else {
+            Ok(id)
+        }
     }
 }
 
@@ -556,7 +644,6 @@ pub enum Literal {
     Nil,
     Number(f64),
     String(String),
-    Id(String),
 }
 
 impl std::fmt::Debug for Literal {
@@ -567,7 +654,6 @@ impl std::fmt::Debug for Literal {
             Self::Nil => write!(f, "Nil"),
             Self::Number(n) => f.debug_tuple("Number").field(n).finish(),
             Self::String(s) => f.debug_tuple("String").field(s).finish(),
-            Self::Id(id) => f.debug_tuple("Id").field(id).finish(),
         }
     }
 }
@@ -577,7 +663,6 @@ impl PartialEq for Literal {
         match (self, other) {
             (Self::Number(l0), Self::Number(r0)) => l0 == r0,
             (Self::String(l0), Self::String(r0)) => l0 == r0,
-            (Self::Id(l0), Self::Id(r0)) => l0 == r0,
             _ => core::mem::discriminant(self) == core::mem::discriminant(other),
         }
     }
@@ -636,15 +721,11 @@ impl From<&Literal> for bool {
 }
 
 impl Evaluate for Literal {
-    fn evaluate<'s, 'ctx>(&'s self, env: &'ctx Context) -> Result<Value, EvaluateError>
+    fn evaluate<'s, 'ctx>(&'s self, _env: &'ctx Context) -> Result<Value, EvaluateError>
     where
         's: 'ctx,
     {
         Ok(match self {
-            Self::Id(s) => env
-                .get(s)
-                .ok_or_else(|| EvaluateError::UndefinedVariable(s.clone()))?,
-            // TODO: might change how we handle literals that are functions.
             Self::Nil => Value::Nil,
             Self::True => Value::Bool(true),
             Self::False => Value::Bool(false),
@@ -666,7 +747,6 @@ impl Literal {
                     "nil".value(Self::Nil),
                     Self::number,
                     Self::string,
-                    Self::identifier.map(Self::Id),
                 )),
                 whitespace,
             ),
@@ -718,56 +798,6 @@ impl Literal {
         .map(|s: S::Slice| Self::String(std::str::from_utf8(s.as_bstr()).unwrap().to_string()))
         .parse_next(input)
     }
-
-    pub(crate) fn word<'s>(input: &mut Input<'s>) -> ModalResult<String, Error<'s, Input<'s>>> {
-        trace(
-            "word",
-            (
-                any.verify(|c: &<Input as Stream>::Token| {
-                    let c = c.as_char();
-                    c.is_alphabetic() || c == '_'
-                }),
-                take_while(0.., |c: <Input as Stream>::Token| {
-                    let c = c.as_char();
-                    c.is_alphanumeric() || c == '_'
-                }),
-            )
-                .take()
-                .map(ToString::to_string),
-        )
-        .parse_next(input)
-    }
-
-    pub(crate) fn identifier<'s>(
-        input: &mut Input<'s>,
-    ) -> ModalResult<String, Error<'s, Input<'s>>> {
-        let id = trace("identifier", Self::word).parse_next(input)?;
-        if matches!(
-            id.as_ref(),
-            "and"
-                | "class"
-                | "else"
-                | "false"
-                | "for"
-                | "fun"
-                | "if"
-                | "nil"
-                | "or"
-                | "print"
-                | "return"
-                | "super"
-                | "this"
-                | "true"
-                | "var"
-                | "while"
-        ) {
-            Err(ErrMode::Backtrack(Error::from(
-                EvaluateError::ReservedWord(id),
-            )))
-        } else {
-            Ok(id)
-        }
-    }
 }
 
 impl std::fmt::Display for Literal {
@@ -778,7 +808,6 @@ impl std::fmt::Display for Literal {
             Self::Nil => write!(f, "nil"),
             Self::Number(n) => write!(f, "{n}"),
             Self::String(s) => write!(f, "{s}"),
-            Self::Id(s) => write!(f, "{s}"),
         }
     }
 }
@@ -920,7 +949,7 @@ mod tests {
         assert!(res.is_err());
         assert_eq!(
             res.unwrap_err().to_string(),
-            "[line 3] Error at ')': Expect expression."
+            "[line 3] Error at ')': expect expression."
         );
         Ok(())
     }

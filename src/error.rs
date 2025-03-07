@@ -41,21 +41,32 @@ where
     }
 }
 
+#[derive(Debug, Clone)]
+pub enum ParseErrorType {
+    Expected(&'static str),
+    VariableUndefined(String),
+}
+
+impl Display for ParseErrorType {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            ParseErrorType::Expected(s) => write!(f, "expect {s}."),
+            ParseErrorType::VariableUndefined(name) => write!(f, "Undefined variable: `{name}`"),
+        }
+    }
+}
+
 #[derive(Debug)]
 pub struct ParseError<'s> {
-    pub message: String,
+    pub ty: ParseErrorType,
     pub input: Input<'s>,
     pub line: usize,
 }
 
 impl<'s> ParseError<'s> {
-    pub fn new(message: String, input: Input<'s>) -> Self {
+    pub fn new(ty: ParseErrorType, input: Input<'s>) -> Self {
         let line = input.state.line();
-        Self {
-            message,
-            input,
-            line,
-        }
+        Self { ty, input, line }
     }
 }
 
@@ -67,11 +78,7 @@ impl Display for ParseError<'_> {
             &format!("'{}'", self.input.peek_slice(1))
         };
 
-        write!(
-            f,
-            "[line {}] Error at {}: {}",
-            self.line, input, self.message
-        )
+        write!(f, "[line {}] Error at {}: {}", self.line, input, self.ty)
     }
 }
 

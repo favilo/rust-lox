@@ -1,13 +1,10 @@
-// This program demonstrates global and local variable shadowing in Lox.
-var a = 90;
+var a = "global";
+{
+  fun showA() {
+    print a;
+  }
 
-fun printAndModify() {
-  print a;
-  var a = 43;
-  print a;
+  showA();
+  var a = "block";
+  showA();
 }
-
-print a;
-var a = 60;
-print printAndModify;
-printAndModify();

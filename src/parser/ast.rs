@@ -1,15 +1,15 @@
 use std::iter::once;
 
 use winnow::{
-    combinator::{alt, backtrack_err, delimited, opt, preceded, repeat, terminated, trace},
-    error::ErrMode,
+    ascii::alpha1,
+    combinator::{alt, delimited, opt, preceded, repeat, terminated, trace},
     seq,
     stream::Stream,
     ModalResult, Parser,
 };
 
 use crate::{
-    error::{Error, EvaluateError, ParseError},
+    error::{Error, EvaluateError, ParseErrorType},
     interpreter::Context,
     parser::whitespace1,
 };
@@ -39,7 +39,7 @@ impl std::fmt::Display for Ast {
 pub enum Statement {
     Expr(Expr),
     Print(Expr),
-    Var(String, Expr),
+    Var(String, Option<usize>, Expr),
     Block(Vec<Statement>),
     If(Expr, Box<Statement>, Option<Box<Statement>>),
     While(Expr, Box<Statement>),
@@ -53,7 +53,7 @@ impl std::fmt::Display for Statement {
         match self {
             Statement::Expr(expr) => write!(f, "{};", expr),
             Statement::Print(expr) => write!(f, "print {};", expr),
-            Statement::Var(_, expr) => write!(f, "var = {};", expr),
+            Statement::Var(_, _depth, expr) => write!(f, "var = {};", expr),
             Statement::Block(vec) => {
                 writeln!(f, "{{")?;
                 for stmt in vec {
@@ -126,10 +126,11 @@ impl Evaluate for Statement {
                 println!("{}", expr.evaluate(env)?);
                 Ok(Value::Nil)
             }
-            Statement::Var(name, expr) => {
+            Statement::Var(name, depth, expr) => {
                 log::trace!("var: {} = {}", name, expr);
                 let value = expr.evaluate(env)?;
-                env.declare(name, value.clone());
+                log::trace!("Declaring variable [{name}] to {value} with depth {depth:?}");
+                env.declare(name, value.clone(), *depth);
                 log::debug!("define: {} = {:?}", name, value);
                 log::debug!("environment: {:?}", env);
                 Ok(value)
@@ -189,10 +190,11 @@ impl Evaluate for Statement {
                     name.to_string(),
                     params.clone(),
                     body.clone().into(),
-                    env.child(),
+                    env.clone(),
                 );
-                log::debug!("define: {name} = {value:#?}");
-                env.set(name, value.clone());
+                let depth = env.depth();
+                log::debug!("define: {name} = {value:#?} with depth {depth:?}");
+                env.declare(name, value.clone(), depth);
                 log::debug!("function definition global env: {env:?}");
 
                 Ok(value)
@@ -204,7 +206,9 @@ impl Evaluate for Statement {
 impl Run for Ast {
     fn run(&self) -> Result<(), Error<'_, Input<'_>>> {
         let env = Context::new();
+        log::trace!("*** Begin running ***");
         self.evaluate(&env)?;
+        log::trace!("*** Done running ***\n");
         Ok(())
     }
 }
@@ -223,27 +227,47 @@ impl Statement {
     }
 
     fn declaration<'s>(input: &mut Input<'s>) -> ModalResult<Statement, Error<'s, Input<'s>>> {
-        alt((Self::function, Self::var, Self::stmt)).parse_next(input)
+        alt((Self::function, Self::var_decl, Self::stmt)).parse_next(input)
     }
 
     fn function<'s>(input: &mut Input<'s>) -> ModalResult<Statement, Error<'s, Input<'s>>> {
-        seq! {
-            _: ("fun", whitespace1),
-            alt((Literal::identifier, parse_error("Expect identifier"))),
-            _: whitespace,
-            delimited(
-                ("(", whitespace),
-                Self::argument_names,
-                alt(((whitespace, ")", whitespace), parse_error("Expect ')'"))),
-            ),
-            Self::block,
-        }
-        .map(|(name, params, body)| Statement::Function(name, params, Box::new(body)))
-        .parse_next(input)
+        (
+            alpha1.verify(|id: <Input as Stream>::Slice| id == "fun"),
+            whitespace,
+        )
+            .parse_next(input)?;
+
+        let name = alt((
+            Expr::identifier,
+            parse_error(ParseErrorType::Expected("identifier")),
+        ))
+        .parse_next(input)?;
+        input.state.define(&name);
+        alt((
+            (whitespace, "(", whitespace),
+            parse_error(ParseErrorType::Expected("'('")),
+        ))
+        .parse_next(input)?;
+        let params = Self::argument_names.parse_next(input)?;
+        input.state.start_scope();
+        log::debug!(
+            "Entering function params scope: {:?}",
+            input.state.scopes().collect::<Vec<_>>()
+        );
+        params.iter().for_each(|param| input.state.define(param));
+        alt((
+            (whitespace, ")", whitespace),
+            parse_error(ParseErrorType::Expected("')'")),
+        ))
+        .parse_next(input)?;
+        let body = Self::block.parse_next(input)?;
+        input.state.end_scope();
+        log::debug!("Exiting function scope: {}", input.state.scope_len());
+        Ok(Statement::Function(name, params, Box::new(body)))
     }
 
     fn argument_names<'s>(input: &mut Input<'s>) -> ModalResult<Vec<String>, Error<'s, Input<'s>>> {
-        let head = trace("first argument", opt(Literal::identifier)).parse_next(input)?;
+        let head = trace("first argument", opt(Expr::identifier)).parse_next(input)?;
         let Some(head) = head else {
             return Ok(vec![]);
         };
@@ -252,7 +276,7 @@ impl Statement {
             "rest of arguments",
             repeat(
                 0..,
-                preceded((whitespace, ",", whitespace), Literal::identifier),
+                preceded((whitespace, ",", whitespace), Expr::identifier),
             ),
         )
         .parse_next(input)?;
@@ -277,12 +301,12 @@ impl Statement {
 
     fn for_loop<'s>(input: &mut Input<'s>) -> ModalResult<Statement, Error<'s, Input<'s>>> {
         seq! {
-            _: ("for", whitespace, alt(("(", parse_error("Expect '('"))), whitespace),
-            alt((alt((Self::var , Self::expr_stmt)).map(Some), (whitespace, ";", whitespace).map(|_|None))),
+            _: ("for", whitespace, alt(("(", parse_error(ParseErrorType::Expected("'('")))), whitespace),
+            alt((alt((Self::var_decl , Self::expr_stmt)).map(Some), (whitespace, ";", whitespace).map(|_|None))),
             opt(Expr::parser),
             _: (whitespace, ";", whitespace),
             opt(Expr::parser),
-            _: (whitespace, alt((")", parse_error("Expect ')'"))), whitespace),
+            _: (whitespace, alt((")", parse_error(ParseErrorType::Expected("')'")))), whitespace),
             Self::stmt,
         }
         .map(|(init, condition, increment, body): (Option<Statement>, Option<Expr>, Option<Expr>, Statement)| {
@@ -298,9 +322,9 @@ impl Statement {
 
     fn while_loop<'s>(input: &mut Input<'s>) -> ModalResult<Statement, Error<'s, Input<'s>>> {
         seq! {
-            _: ("while", whitespace, alt(("(", parse_error("Expect '('"))), whitespace),
+            _: ("while", whitespace, alt(("(", parse_error(ParseErrorType::Expected("'('")))), whitespace),
             Expr::parser,
-            _: (whitespace, alt((")", parse_error("Expect ')'"))), whitespace),
+            _: (whitespace, alt((")", parse_error(ParseErrorType::Expected("')'")))), whitespace),
             Self::stmt,
         }
         .map(|(condition, stmt)| Statement::While(condition, Box::new(stmt)))
@@ -309,9 +333,9 @@ impl Statement {
 
     fn condition<'s>(input: &mut Input<'s>) -> ModalResult<Statement, Error<'s, Input<'s>>> {
         seq! {
-            _: ("if", whitespace, alt(("(", parse_error("Expect '('"))), whitespace),
+            _: ("if", whitespace, alt(("(", parse_error(ParseErrorType::Expected("'('")))), whitespace),
             Expr::parser,
-            _: (whitespace, alt((")", parse_error("Expect ')'"))), whitespace),
+            _: (whitespace, alt((")", parse_error(ParseErrorType::Expected("')'")))), whitespace),
             Self::stmt,
             opt(preceded((whitespace, "else", whitespace), Self::stmt)),
         }
@@ -322,34 +346,54 @@ impl Statement {
     }
 
     fn block<'s>(input: &mut Input<'s>) -> ModalResult<Statement, Error<'s, Input<'s>>> {
-        delimited(
-            "{",
-            Ast::parser.map(|ast| Statement::Block(ast.statements)),
-            alt((("}", whitespace), parse_error("Expect '}'"))),
-        )
-        .parse_next(input)
+        "{".parse_next(input)?;
+        input.state.start_scope();
+        log::debug!(
+            "Entering block scope: {:?}",
+            input.state.scopes().collect::<Vec<_>>()
+        );
+        let block = Ast::parser
+            .map(|ast| Statement::Block(ast.statements))
+            .parse_next(input)?;
+        log::debug!("Exiting block scope: {}", input.state.scope_len());
+        input.state.end_scope();
+        alt((
+            ("}", whitespace),
+            parse_error(ParseErrorType::Expected("'}'")),
+        ))
+        .parse_next(input)?;
+        Ok(block)
     }
 
-    fn var<'s>(input: &mut Input<'s>) -> ModalResult<Statement, Error<'s, Input<'s>>> {
+    fn var_decl<'s>(input: &mut Input<'s>) -> ModalResult<Statement, Error<'s, Input<'s>>> {
+        terminated(
+            alpha1.verify(|id: <Input as Stream>::Slice| id == "var"),
+            whitespace,
+        )
+        .parse_next(input)?;
         let (id, var) = seq! {
-            _: terminated("var", whitespace),
-            alt((Literal::identifier, parse_error("expect identifier."))),
+            alt((Expr::identifier, parse_error(ParseErrorType::Expected("identifier")))),
             opt((whitespace, "=", whitespace).void()),
         }
         .parse_next(input)?;
+        input.state.declare(&id);
 
-        let var = if var.is_some() {
+        let expr = if var.is_some() {
             let (expr,) = seq! {
-                alt((Expr::parser, parse_error("Expect expression"))),
+                alt((Expr::parser, parse_error(ParseErrorType::Expected("expression")))),
             }
             .parse_next(input)?;
-            Statement::Var(id, expr)
+            expr
         } else {
-            Statement::Var(id, Expr::Literal(Literal::Nil))
+            Expr::Literal(Literal::Nil)
         };
+        input.state.define(&id);
+        let depth = input.state.depth(&id);
+        log::debug!("Declaring variable [{id}] with depth {depth:?}");
+        let var = Statement::Var(id, depth, expr);
         (
             whitespace,
-            alt((";", parse_error("Expect ';'"))),
+            alt((";", parse_error(ParseErrorType::Expected("';'")))),
             whitespace,
         )
             .void()
@@ -362,7 +406,7 @@ impl Statement {
             Expr::parser.map(Statement::Expr),
             (
                 whitespace,
-                alt((";", parse_error("Expect ';'"))),
+                alt((";", parse_error(ParseErrorType::Expected("';'")))),
                 whitespace,
             ),
         )
@@ -373,7 +417,7 @@ impl Statement {
         let semicolon =
             |input: &mut Input<'s>| (whitespace, ";", whitespace).void().parse_next(input);
         seq! {
-            _: "return",
+            _: alpha1.verify(|id: <Input as Stream>::Slice| id == "return"),
             alt((delimited(whitespace1, Expr::parser, semicolon).map(Some), semicolon.map(|_| None))),
         }
         .map(|(expr,)| Statement::Return(expr.unwrap_or(Expr::Literal(Literal::Nil))))
@@ -384,15 +428,15 @@ impl Statement {
         let semicolon = |input: &mut Input<'s>| {
             (
                 whitespace,
-                alt((";", parse_error("expect expression"))),
+                alt((";", parse_error(ParseErrorType::Expected("expression")))),
                 whitespace,
             )
                 .void()
                 .parse_next(input)
         };
         seq! {
-            _: (Literal::word.verify(|id: <Input as Stream>::Slice| id == "print"), whitespace),
-            terminated(alt((Expr::parser, parse_error("expect expression."))), semicolon),
+            _: (alpha1.verify(|id: <Input as Stream>::Slice| id == "print"), whitespace),
+            terminated(alt((Expr::parser, parse_error(ParseErrorType::Expected("expression")))), semicolon),
         }
         .map(|(expr,)| Statement::Print(expr))
         .parse_next(input)
@@ -400,7 +444,9 @@ impl Statement {
 }
 
 pub fn parse(input: &str) -> Result<Ast, Error<'_, Input<'_>>> {
+    log::trace!("\n*** Begin parsing ***");
     let ast = Ast::parser.parse(Stateful::new(input, State::new(1)))?;
+    log::trace!("*** Done parsing ***\n\n");
     Ok(ast)
 }
 
@@ -510,6 +556,26 @@ print true;
             }
             fib(10);
         "#;
+
+        let env = Context::new();
+        let ast: Ast = parse(input).unwrap();
+        let res = ast.evaluate(&env).unwrap();
+        assert_eq!(res, Value::Number(55.0));
+    }
+
+    #[test]
+    fn test_static_scope() {
+        let input = r#"
+            var a = "global";
+            {
+              fun showA() {
+                print a;
+              }
+
+              showA();
+              var a = "block";
+              showA();
+            }"#;
 
         let env = Context::new();
         let ast: Ast = parse(input).unwrap();

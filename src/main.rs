@@ -1,3 +1,4 @@
+#![feature(debug_closure_helpers)]
 use std::{fs, path::PathBuf};
 
 use clap::{Parser, Subcommand};

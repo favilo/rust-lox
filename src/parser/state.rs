@@ -1,14 +1,20 @@
-#[allow(unused_imports)]
-use winnow::stream::Stateful as _;
+use std::collections::{HashMap, VecDeque};
+
 use winnow::{
-    error::Needed,
+    combinator::trace,
+    error::{ErrMode, Needed},
     stream::{
         AsBStr, AsBytes, Compare, CompareResult, FindSlice, Location, Offset, SliceLen, Stream,
         StreamIsPartial, UpdateSlice,
     },
+    Parser,
 };
 
-#[derive(Debug, Clone, Copy, Default, Eq, PartialEq)]
+use crate::{error::Error, interpreter::Environment};
+
+use super::Input;
+
+#[derive(Debug, Clone, Default, Eq, PartialEq)]
 pub struct Stateful<S> {
     input: S,
     pub(crate) state: State,
@@ -20,14 +26,23 @@ impl<S> Stateful<S> {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, PartialEq, Eq, Default, Copy, Hash)]
+pub enum VarState {
+    #[default]
+    Declared,
+    Defined,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct State {
     line: usize,
+    scopes: VecDeque<HashMap<String, VarState>>,
 }
 
 impl State {
     pub fn new(line: usize) -> Self {
-        Self { line }
+        let scopes = VecDeque::default();
+        Self { line, scopes }
     }
 
     pub fn line(&self) -> usize {
@@ -36,6 +51,70 @@ impl State {
 
     pub fn inc_line(&mut self) {
         self.line += 1;
+    }
+
+    pub fn start_scope(&mut self) {
+        self.scopes.push_back(Default::default());
+    }
+
+    pub fn end_scope(&mut self) {
+        if !self.scopes.is_empty() {
+            self.scopes.pop_back();
+        }
+    }
+
+    pub fn scope_len(&self) -> usize {
+        self.scopes.len()
+    }
+
+    pub fn scopes(&self) -> impl Iterator<Item = &HashMap<String, VarState>> {
+        self.scopes.iter()
+    }
+
+    pub fn with_scope<'s, Output, P>(
+        &'s mut self,
+        mut f: P,
+    ) -> impl Parser<Input<'s>, Output, ErrMode<Error<'s, Input<'s>>>>
+    where
+        P: Parser<Input<'s>, Output, ErrMode<Error<'s, Input<'s>>>>,
+    {
+        trace("with_scope", move |input: &mut Input<'s>| {
+            self.start_scope();
+            let r = f.parse_next(input);
+            self.end_scope();
+            r
+        })
+    }
+
+    pub fn declare(&mut self, name: &str) {
+        if self.scopes.is_empty() {
+            return;
+        }
+        self.scopes
+            .get_mut(self.scopes.len() - 1)
+            .expect("Always at least one scope")
+            .insert(name.to_string(), VarState::Declared);
+    }
+
+    pub fn define(&mut self, name: &str) {
+        if self.scopes.is_empty() {
+            return;
+        }
+        self.scopes
+            .get_mut(self.scopes.len() - 1)
+            .expect("Alwyas at least one scope")
+            .insert(name.to_string(), VarState::Defined);
+        log::trace!("Define [{name}] in scope: {:?}", self.scopes);
+    }
+
+    pub fn depth(&mut self, name: &str) -> Option<usize> {
+        self.scopes
+            .iter()
+            .rev()
+            .enumerate()
+            .find(|(_i, scope)| scope.contains_key(name))
+            .filter(|(_, scope)| scope.get(name) == Some(&VarState::Defined))
+            .map(|(i, _scope)| i)
     }
 }
 
@@ -111,12 +190,12 @@ impl<I: Stream> Stream for Stateful<I> {
 
     #[inline(always)]
     fn checkpoint(&self) -> Self::Checkpoint {
-        StateCheckpoint::<_, Self>::new(self.input.checkpoint(), self.state)
+        StateCheckpoint::<_, Self>::new(self.input.checkpoint(), self.state.clone())
     }
     #[inline(always)]
     fn reset(&mut self, checkpoint: &Self::Checkpoint) {
         self.input.reset(&checkpoint.inner);
-        self.state = checkpoint.state;
+        self.state = checkpoint.state.clone();
     }
 
     #[inline(always)]
@@ -131,23 +210,21 @@ pub struct StateCheckpoint<C, S> {
     stream: core::marker::PhantomData<S>,
 }
 impl<I, S> StateCheckpoint<I, S> {
-    fn new(checkpoint: I, state: State) -> Self {
+    fn new(inner: I, state: State) -> Self {
         Self {
-            inner: checkpoint,
+            inner,
             state,
             stream: Default::default(),
         }
     }
 }
 
-impl<T: Copy, S> Copy for StateCheckpoint<T, S> {}
-
 impl<T: Clone, S> Clone for StateCheckpoint<T, S> {
     #[inline(always)]
     fn clone(&self) -> Self {
         Self {
             inner: self.inner.clone(),
-            state: self.state,
+            state: self.state.clone(),
             stream: Default::default(),
         }
     }
