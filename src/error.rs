@@ -1,7 +1,7 @@
 use std::fmt::Display;
 
 use winnow::{
-    error::{AddContext, FromExternalError, ParserError},
+    error::{AddContext, ErrMode, FromExternalError, ParserError},
     stream::Stream,
 };
 
@@ -44,14 +44,14 @@ where
 #[derive(Debug, Clone)]
 pub enum ParseErrorType {
     Expected(&'static str),
-    VariableUndefined(String),
+    UndefinedVariable(String),
 }
 
 impl Display for ParseErrorType {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            ParseErrorType::Expected(s) => write!(f, "expect {s}."),
-            ParseErrorType::VariableUndefined(name) => write!(f, "Undefined variable: `{name}`"),
+            ParseErrorType::Expected(s) => write!(f, "Expect {s}."),
+            ParseErrorType::UndefinedVariable(name) => write!(f, "Undefined variable: `{name}`"),
         }
     }
 }
@@ -59,26 +59,30 @@ impl Display for ParseErrorType {
 #[derive(Debug)]
 pub struct ParseError<'s> {
     pub ty: ParseErrorType,
+    pub token: <Input<'s> as Stream>::Slice,
     pub input: Input<'s>,
     pub line: usize,
 }
 
 impl<'s> ParseError<'s> {
-    pub fn new(ty: ParseErrorType, input: Input<'s>) -> Self {
+    pub fn new(ty: ParseErrorType, token: <Input<'s> as Stream>::Slice, input: Input<'s>) -> Self {
         let line = input.state.line();
-        Self { ty, input, line }
+        Self {
+            ty,
+            token,
+            input,
+            line,
+        }
     }
 }
 
 impl Display for ParseError<'_> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let input = if self.input.offset_at(0).expect("tokens 0") >= self.input.eof_offset() {
-            "[EOF]"
-        } else {
-            &format!("'{}'", self.input.peek_slice(1))
-        };
-
-        write!(f, "[line {}] Error at {}: {}", self.line, input, self.ty)
+        write!(
+            f,
+            "[line {}] Error at '{}': {}",
+            self.line, self.token, self.ty
+        )
     }
 }
 
@@ -143,12 +147,15 @@ impl<S: Stream + Clone, E: std::error::Error + Send + Sync + 'static> FromExtern
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq)]
 pub enum EvaluateError {
     TypeMismatch { expected: String },
     UndefinedVariable(String),
+    AlreadyDefined(String),
+    CannotAssignToSelf(String),
     ReservedWord(String),
     ArgumentMismatch { expected: usize, got: usize },
+    FunctionBodyNotBlock(String),
     NotCallable(Value),
     Return(Value),
 }
@@ -164,12 +171,20 @@ impl Display for EvaluateError {
         match self {
             Self::TypeMismatch { expected } => write!(f, "Operands must be {expected}"),
             Self::UndefinedVariable(name) => write!(f, "Undefined variable: '{name}'"),
+            Self::AlreadyDefined(name) => write!(
+                f,
+                "Error at '{name}': Already a variable with this name in this scope."
+            ),
             Self::ReservedWord(name) => write!(f, "Cannot assign to reserved word: '{name}'"),
             Self::ArgumentMismatch { expected, got } => {
                 write!(f, "Agrument mismatch: expected {expected}, found {got}.")
             }
+            Self::FunctionBodyNotBlock(name) => {
+                write!(f, "Function body must be a block: '{name}'.")
+            }
             Self::NotCallable(v) => write!(f, "Expected callable, found {v:?}."),
             Self::Return(v) => write!(f, "Returned value: {v}."),
+            Self::CannotAssignToSelf(name) => write!(f, "Error at '{name}': Can't read local variable in its own initializer."),
         }
     }
 }

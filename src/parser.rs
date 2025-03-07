@@ -2,10 +2,10 @@ use std::sync::Arc;
 
 use ast::Statement;
 use winnow::{
-    combinator::{alt, delimited, eof, opt, repeat, repeat_till, trace},
+    combinator::{alt, delimited, eof, opt, preceded, repeat, repeat_till, trace},
     error::ErrMode,
     stream::Stream,
-    token::{any, one_of},
+    token::{any, one_of, take_till},
     ModalResult, Parser,
 };
 
@@ -29,7 +29,7 @@ pub trait Evaluate {
 }
 
 pub trait Run {
-    fn run(&self) -> Result<(), Error<'_, Input<'_>>>;
+    fn run(&self) -> Result<(), EvaluateError>;
 }
 
 pub fn comment<'s>(input: &mut Input<'s>) -> ModalResult<(), Error<'s, Input<'s>>>
@@ -83,9 +83,11 @@ pub fn parse_error<'s, Output>(
     ty: ParseErrorType,
 ) -> impl Parser<Input<'s>, Output, ErrMode<Error<'s, Input<'s>>>> {
     trace("parse_error", move |input: &mut Input<'s>| {
-        whitespace.parse_next(input)?;
+        let token =
+            preceded(whitespace, take_till(0.., ['\n', '\r', ' ', '\t'])).parse_next(input)?;
         Err(ErrMode::Cut(Error::Parse(ParseError::new(
             ty.clone(),
+            token,
             input.clone(),
         ))))
     })

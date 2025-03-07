@@ -16,7 +16,10 @@ use winnow::{
 use crate::{
     error::{Error, EvaluateError, ParseErrorType},
     interpreter::Context,
-    parser::state::{State, Stateful},
+    parser::{
+        ast::Statement,
+        state::{State, Stateful},
+    },
 };
 
 use super::{parse_error, whitespace, Evaluate, Input, Value};
@@ -82,11 +85,17 @@ impl Evaluate for Expr {
                             });
                         }
                         let fn_env = parent_env.child();
-                        zip(names.iter(), args.iter())
-                            .for_each(|(name, arg)| fn_env.declare(name, arg.clone(), Some(0)));
+                        zip(names.iter(), args.iter()).try_for_each(|(name, arg)| {
+                            fn_env.declare(name, arg.clone(), Some(0))
+                        })?;
                         log::trace!("Function env: {fn_env:#?}");
-                        let stmt = Arc::unwrap_or_clone(stmt);
-                        let result = stmt.evaluate(&fn_env);
+                        let stmts = match stmt.as_ref() {
+                            Statement::Block(stmts) => stmts.clone(),
+                            _ => return Err(EvaluateError::FunctionBodyNotBlock(stmt.to_string())),
+                        };
+                        let result = stmts
+                            .into_iter()
+                            .try_fold(Value::Nil, |_, stmt| stmt.evaluate(&fn_env));
                         if let Err(EvaluateError::Return(n)) = result {
                             Ok(n)
                         } else {
@@ -415,6 +424,11 @@ impl Expr {
 
     fn variable<'s>(input: &mut Input<'s>) -> ModalResult<Expr, Error<'s, Input<'s>>> {
         let name = Self::identifier.parse_next(input)?;
+        if input.state.is_declared(&name) {
+            return Err(ErrMode::Cut(Error::from(
+                EvaluateError::CannotAssignToSelf(name),
+            )));
+        }
         let depth = input.state.depth(&name);
         log::debug!("Found variable [{name}] with depth {depth:?}");
 
@@ -995,7 +1009,7 @@ mod tests {
         assert!(res.is_err());
         assert_eq!(
             res.unwrap_err().to_string(),
-            "[line 3] Error at ')': expect expression."
+            "[line 3] Error at ')': Expect expression."
         );
         Ok(())
     }

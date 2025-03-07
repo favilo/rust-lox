@@ -31,8 +31,13 @@ impl Context {
         self.env.borrow_mut().set(name, value, depth)
     }
 
-    pub fn declare(&self, name: &str, value: Value, depth: Option<usize>) {
-        self.env.borrow_mut().declare(name, value, depth);
+    pub fn declare(
+        &self,
+        name: &str,
+        value: Value,
+        depth: Option<usize>,
+    ) -> Result<(), EvaluateError> {
+        self.env.borrow_mut().declare(name, value, depth)
     }
 
     pub fn child(&self) -> Self {
@@ -175,12 +180,21 @@ impl Environment {
         }
     }
 
-    fn declare(&mut self, name: &str, value: Value, depth: Option<usize>) {
+    fn declare(
+        &mut self,
+        name: &str,
+        value: Value,
+        depth: Option<usize>,
+    ) -> Result<(), EvaluateError> {
         if depth.is_none() {
             self.globals.borrow_mut().insert(name.to_string(), value);
         } else {
+            if self.stack.contains_key(name) {
+                return Err(EvaluateError::AlreadyDefined(name.to_string()));
+            }
             self.stack.insert(name.to_string(), value);
         }
+        Ok(())
     }
 
     fn depth(&self) -> Option<usize> {

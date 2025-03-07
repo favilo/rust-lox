@@ -13,7 +13,7 @@ use winnow::{
     Parser,
 };
 
-use crate::error::Error;
+use crate::error::{Error, EvaluateError};
 
 use super::Input;
 
@@ -89,25 +89,52 @@ impl State {
         })
     }
 
-    pub fn declare(&mut self, name: &str) {
+    pub fn declare(&mut self, name: &str) -> Result<(), EvaluateError> {
         if self.scopes.is_empty() {
-            return;
+            return Ok(());
         }
-        self.scopes
+        let mut scope = self
+            .scopes
             .get_mut(self.scopes.len() - 1)
-            .expect("Always at least one scope")
-            .insert(name.to_string(), VarState::Declared);
+            .expect("Always at least one scope");
+        if scope.contains_key(name) {
+            return Err(EvaluateError::AlreadyDefined(name.to_string()));
+        }
+        scope.insert(name.to_string(), VarState::Declared);
+        Ok(())
     }
 
-    pub fn define(&mut self, name: &str) {
+    pub fn define(&mut self, name: &str) -> Result<(), EvaluateError> {
         if self.scopes.is_empty() {
-            return;
+            return Ok(());
         }
-        self.scopes
+        let mut scope = self
+            .scopes
             .get_mut(self.scopes.len() - 1)
-            .expect("Alwyas at least one scope")
-            .insert(name.to_string(), VarState::Defined);
+            .expect("Alwyas at least one scope");
+        let Some(state) = scope.get_mut(name) else {
+            return Err(EvaluateError::UndefinedVariable(name.to_string()));
+        };
+        if *state == VarState::Defined {
+            return Err(EvaluateError::AlreadyDefined(name.to_string()));
+        }
+        *state = VarState::Defined;
         log::trace!("Define [{name}] in scope: {:?}", self.scopes);
+        Ok(())
+    }
+
+    pub fn is_defined(&self, name: &str) -> bool {
+        self.scopes
+            .iter()
+            .rev()
+            .any(|scope| scope.get(name) == Some(&VarState::Defined))
+    }
+
+    pub fn is_declared(&self, name: &str) -> bool {
+        self.scopes
+            .iter()
+            .rev()
+            .any(|scope| scope.get(name) == Some(&VarState::Declared))
     }
 
     pub fn depth(&mut self, name: &str) -> Option<usize> {
