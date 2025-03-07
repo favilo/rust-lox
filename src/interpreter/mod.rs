@@ -5,12 +5,21 @@ use crate::{error::EvaluateError, parser::Value};
 #[derive(Debug, Clone)]
 pub struct Context {
     env: Rc<RefCell<Environment>>,
+    stdout: Option<Rc<RefCell<String>>>,
 }
 
 impl Context {
     pub fn new() -> Self {
         Self {
             env: Rc::new(RefCell::new(Environment::new())),
+            stdout: None,
+        }
+    }
+
+    pub fn with_stdout(&self) -> Self {
+        Self {
+            env: Rc::clone(&self.env),
+            stdout: Some(Rc::default()),
         }
     }
 
@@ -23,21 +32,36 @@ impl Context {
     }
 
     pub fn declare(&self, name: &str, value: Value, depth: Option<usize>) {
-        self.env.borrow_mut().declare(name, value, depth)
+        self.env.borrow_mut().declare(name, value, depth);
     }
 
     pub fn child(&self) -> Self {
         Self {
             env: Rc::new(RefCell::new(Environment {
-                stack: Default::default(),
+                stack: HashMap::default(),
                 globals: Rc::clone(&self.env.borrow().globals),
                 parent: Some(Rc::clone(&self.env)),
             })),
+            stdout: self.stdout.clone(),
         }
     }
 
     pub fn depth(&self) -> Option<usize> {
         self.env.borrow().depth()
+    }
+
+    pub fn print(&self, value: &Value) {
+        if let Some(stdout) = self.stdout.as_ref() {
+            let mut stdout = stdout.borrow_mut();
+            stdout.push_str(&value.to_string());
+            stdout.push('\n');
+        } else {
+            println!("{value}");
+        }
+    }
+
+    pub fn stdout(&self) -> Option<String> {
+        self.stdout.as_ref().map(|s| s.borrow().clone())
     }
 
     // pub fn make_clone(&self) -> Self {
@@ -102,7 +126,7 @@ impl Environment {
         );
         Self {
             parent: None,
-            stack: Default::default(),
+            stack: HashMap::default(),
             globals: Rc::new(RefCell::new(globals)),
         }
     }
@@ -160,9 +184,7 @@ impl Environment {
     }
 
     fn depth(&self) -> Option<usize> {
-        let Some(parent) = self.parent.as_ref() else {
-            return None;
-        };
+        let parent = self.parent.as_ref()?;
         let borrow = parent.borrow();
         Some(borrow.depth().unwrap_or(1) + 1)
     }

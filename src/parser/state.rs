@@ -1,4 +1,7 @@
-use std::collections::{HashMap, VecDeque};
+use std::{
+    collections::{HashMap, VecDeque},
+    marker::PhantomData,
+};
 
 use winnow::{
     combinator::trace,
@@ -10,7 +13,7 @@ use winnow::{
     Parser,
 };
 
-use crate::{error::Error, interpreter::Environment};
+use crate::error::Error;
 
 use super::Input;
 
@@ -54,7 +57,7 @@ impl State {
     }
 
     pub fn start_scope(&mut self) {
-        self.scopes.push_back(Default::default());
+        self.scopes.push_back(HashMap::default());
     }
 
     pub fn end_scope(&mut self) {
@@ -119,7 +122,6 @@ impl State {
 }
 
 impl<I> AsRef<I> for Stateful<I> {
-    #[inline(always)]
     fn as_ref(&self) -> &I {
         &self.input
     }
@@ -135,7 +137,6 @@ impl<I> SliceLen for Stateful<I>
 where
     I: SliceLen,
 {
-    #[inline(always)]
     fn slice_len(&self) -> usize {
         self.input.slice_len()
     }
@@ -149,56 +150,45 @@ impl<I: Stream> Stream for Stateful<I> {
 
     type Checkpoint = StateCheckpoint<I::Checkpoint, Self>;
 
-    #[inline(always)]
     fn iter_offsets(&self) -> Self::IterOffsets {
         self.input.iter_offsets()
     }
-    #[inline(always)]
     fn eof_offset(&self) -> usize {
         self.input.eof_offset()
     }
 
-    #[inline(always)]
     fn next_token(&mut self) -> Option<Self::Token> {
         self.input.next_token()
     }
 
-    #[inline(always)]
     fn peek_token(&self) -> Option<Self::Token> {
         self.input.peek_token()
     }
 
-    #[inline(always)]
     fn offset_for<P>(&self, predicate: P) -> Option<usize>
     where
         P: Fn(Self::Token) -> bool,
     {
         self.input.offset_for(predicate)
     }
-    #[inline(always)]
     fn offset_at(&self, tokens: usize) -> Result<usize, Needed> {
         self.input.offset_at(tokens)
     }
-    #[inline(always)]
     fn next_slice(&mut self, offset: usize) -> Self::Slice {
         self.input.next_slice(offset)
     }
-    #[inline(always)]
     fn peek_slice(&self, offset: usize) -> Self::Slice {
         self.input.peek_slice(offset)
     }
 
-    #[inline(always)]
     fn checkpoint(&self) -> Self::Checkpoint {
         StateCheckpoint::<_, Self>::new(self.input.checkpoint(), self.state.clone())
     }
-    #[inline(always)]
     fn reset(&mut self, checkpoint: &Self::Checkpoint) {
         self.input.reset(&checkpoint.inner);
         self.state = checkpoint.state.clone();
     }
 
-    #[inline(always)]
     fn raw(&self) -> &dyn std::fmt::Debug {
         &self.input
     }
@@ -214,38 +204,34 @@ impl<I, S> StateCheckpoint<I, S> {
         Self {
             inner,
             state,
-            stream: Default::default(),
+            stream: PhantomData,
         }
     }
 }
 
 impl<T: Clone, S> Clone for StateCheckpoint<T, S> {
-    #[inline(always)]
     fn clone(&self) -> Self {
         Self {
             inner: self.inner.clone(),
             state: self.state.clone(),
-            stream: Default::default(),
+            stream: PhantomData,
         }
     }
 }
 
 impl<T: PartialOrd, S> PartialOrd for StateCheckpoint<T, S> {
-    #[inline(always)]
     fn partial_cmp(&self, other: &Self) -> Option<core::cmp::Ordering> {
         self.inner.partial_cmp(&other.inner)
     }
 }
 
 impl<T: Ord, S> Ord for StateCheckpoint<T, S> {
-    #[inline(always)]
     fn cmp(&self, other: &Self) -> core::cmp::Ordering {
         self.inner.cmp(&other.inner)
     }
 }
 
 impl<T: PartialEq, S> PartialEq for StateCheckpoint<T, S> {
-    #[inline(always)]
     fn eq(&self, other: &Self) -> bool {
         self.inner.eq(&other.inner)
     }
@@ -263,7 +249,6 @@ impl<I, S> Offset for StateCheckpoint<I, S>
 where
     I: Offset,
 {
-    #[inline(always)]
     fn offset_from(&self, start: &Self) -> usize {
         self.inner.offset_from(&start.inner)
     }
@@ -273,11 +258,9 @@ impl<I> Location for Stateful<I>
 where
     I: Location,
 {
-    #[inline(always)]
     fn previous_token_end(&self) -> usize {
         self.input.previous_token_end()
     }
-    #[inline(always)]
     fn current_token_start(&self) -> usize {
         self.input.current_token_start()
     }
@@ -299,12 +282,10 @@ where
         self.input.restore_partial(state);
     }
 
-    #[inline(always)]
     fn is_partial_supported() -> bool {
         I::is_partial_supported()
     }
 
-    #[inline(always)]
     fn is_partial(&self) -> bool {
         self.input.is_partial()
     }
@@ -314,7 +295,6 @@ impl<I> Offset for Stateful<I>
 where
     I: Stream,
 {
-    #[inline(always)]
     fn offset_from(&self, start: &Self) -> usize {
         self.offset_from(&start.checkpoint())
     }
@@ -324,7 +304,6 @@ impl<I> Offset<<Stateful<I> as Stream>::Checkpoint> for Stateful<I>
 where
     I: Stream,
 {
-    #[inline(always)]
     fn offset_from(&self, other: &<Stateful<I> as Stream>::Checkpoint) -> usize {
         self.checkpoint().offset_from(other)
     }
@@ -334,7 +313,6 @@ impl<I> AsBytes for Stateful<I>
 where
     I: AsBytes,
 {
-    #[inline(always)]
     fn as_bytes(&self) -> &[u8] {
         self.input.as_bytes()
     }
@@ -344,7 +322,6 @@ impl<I> AsBStr for Stateful<I>
 where
     I: AsBStr,
 {
-    #[inline(always)]
     fn as_bstr(&self) -> &[u8] {
         self.input.as_bstr()
     }
@@ -354,7 +331,6 @@ impl<I, U> Compare<U> for Stateful<I>
 where
     I: Compare<U>,
 {
-    #[inline(always)]
     fn compare(&self, other: U) -> CompareResult {
         self.input.compare(other)
     }
@@ -364,7 +340,6 @@ impl<I, T> FindSlice<T> for Stateful<I>
 where
     I: FindSlice<T>,
 {
-    #[inline(always)]
     fn find_slice(&self, substr: T) -> Option<std::ops::Range<usize>> {
         self.input.find_slice(substr)
     }
@@ -374,7 +349,6 @@ impl<I> UpdateSlice for Stateful<I>
 where
     I: UpdateSlice,
 {
-    #[inline(always)]
     fn update_slice(mut self, inner: Self::Slice) -> Self {
         self.input = I::update_slice(self.input, inner);
         self

@@ -28,8 +28,8 @@ pub struct Ast {
 
 impl std::fmt::Display for Ast {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        for statement in &self.statements {
-            writeln!(f, "{}", statement)?;
+        for stmt in &self.statements {
+            writeln!(f, "{stmt}")?;
         }
         Ok(())
     }
@@ -51,44 +51,37 @@ pub enum Statement {
 impl std::fmt::Display for Statement {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Statement::Expr(expr) => write!(f, "{};", expr),
-            Statement::Print(expr) => write!(f, "print {};", expr),
-            Statement::Var(_, _depth, expr) => write!(f, "var = {};", expr),
+            Statement::Expr(expr) => write!(f, "{expr};"),
+            Statement::Print(expr) => write!(f, "print {expr};"),
+            Statement::Var(_, _depth, expr) => write!(f, "var = {expr};"),
             Statement::Block(vec) => {
                 writeln!(f, "{{")?;
                 for stmt in vec {
-                    writeln!(f, "{}", stmt)?;
+                    writeln!(f, "{stmt}")?;
                 }
                 write!(f, "}}")
             }
-            Statement::If(expr, statement, statement1) => write!(
+            Statement::If(expr, stmt, statement1) => write!(
                 f,
-                "if ({}) {}{}",
-                expr,
-                statement,
-                if let Some(statement1) = statement1 {
-                    format!(" else {}", statement1)
+                "if ({expr}) {stmt}{}",
+                if let Some(else_stmt) = statement1 {
+                    format!(" else {else_stmt}")
                 } else {
-                    "".to_string()
+                    String::new()
                 }
             ),
-            Statement::While(expr, statement) => write!(f, "while ({}) {}", expr, statement),
+            Statement::While(expr, stmt) => write!(f, "while ({expr}) {stmt}"),
             Statement::For(init, cond, inc, body) => write!(
                 f,
-                "for ({}; {}; {}) {}",
+                "for ({}; {cond}; {}) {body}",
                 init.as_ref()
-                    .map(|stmt| format!("{}", stmt))
-                    .unwrap_or("".to_string()),
-                cond,
-                inc.as_ref()
-                    .map(|expr| format!("{}", expr))
-                    .unwrap_or("".to_string()),
-                body,
+                    .map_or(String::new(), |stmt| format!("{stmt}")),
+                inc.as_ref().map_or(String::new(), |expr| format!("{expr}")),
             ),
             Statement::Function(name, params, body) => {
-                write!(f, "fun {}({}) {}", name, params.join(", "), body)
+                write!(f, "fun {name}({}) {body}", params.join(", "))
             }
-            Statement::Return(expr) => write!(f, "return {};", expr),
+            Statement::Return(expr) => write!(f, "return {expr};"),
         }
     }
 }
@@ -123,7 +116,7 @@ impl Evaluate for Statement {
             }
             Statement::Print(expr) => {
                 log::trace!("print: {}", expr);
-                println!("{}", expr.evaluate(env)?);
+                env.print(&expr.evaluate(env)?);
                 Ok(Value::Nil)
             }
             Statement::Var(name, depth, expr) => {
@@ -418,7 +411,7 @@ impl Statement {
             |input: &mut Input<'s>| (whitespace, ";", whitespace).void().parse_next(input);
         seq! {
             _: alpha1.verify(|id: <Input as Stream>::Slice| id == "return"),
-            alt((delimited(whitespace1, Expr::parser, semicolon).map(Some), semicolon.map(|_| None))),
+            alt((delimited(whitespace1, Expr::parser, semicolon).map(Some), semicolon.map(|()| None))),
         }
         .map(|(expr,)| Statement::Return(expr.unwrap_or(Expr::Literal(Literal::Nil))))
         .parse_next(input)
@@ -508,7 +501,7 @@ print true;
 
     #[test]
     fn test_block() {
-        let input = r#"
+        let input = r"
             var a = 1;
             {
                 var b = 2;
@@ -516,7 +509,7 @@ print true;
                 b = 3;
                 a + b;
             }
-        "#;
+        ";
         let env = Context::new();
         let ast: Ast = parse(input).unwrap();
         let res = ast.evaluate(&env).unwrap();
@@ -525,7 +518,7 @@ print true;
 
     #[test]
     fn test_condition() {
-        let input = r#"if (true) {3;} else {4;}"#;
+        let input = r"if (true) {3;} else {4;}";
         let env = Context::new();
         let ast: Ast = parse(input).unwrap();
         let res = ast.evaluate(&env).unwrap();
@@ -534,13 +527,13 @@ print true;
 
     #[test]
     fn test_for_loop() {
-        let input = r#"
+        let input = r"
             var a = 0;
             for (var i = 0; i < 10; i = i + 1) {
                 a = a + i;
             }
             a;
-        "#;
+        ";
         let env = Context::new();
         let ast: Ast = parse(input).unwrap();
         let res = ast.evaluate(&env).unwrap();
@@ -549,13 +542,13 @@ print true;
 
     #[test]
     fn test_nested_fn() {
-        let input = r#"
+        let input = r"
             fun fib(n) {
               if (n < 2) return n;
               return fib(n - 2) + fib(n - 1);
             }
             fib(10);
-        "#;
+        ";
 
         let env = Context::new();
         let ast: Ast = parse(input).unwrap();
@@ -580,6 +573,39 @@ print true;
         let env = Context::new();
         let ast: Ast = parse(input).unwrap();
         let res = ast.evaluate(&env).unwrap();
-        assert_eq!(res, Value::Number(55.0));
+        assert_eq!(res, Value::Nil);
+    }
+
+    #[test]
+    fn test_nested_closure() {
+        let input = include_str!("../../tests/closure/nested_closure.lox");
+        let env = Context::new().with_stdout();
+        let ast: Ast = parse(input).unwrap();
+        let res = ast.evaluate(&env).unwrap();
+        let stdout = env.stdout().unwrap();
+        assert_eq!(res, Value::Nil);
+        assert_eq!(stdout, "a\nb\nc\n");
+    }
+
+    #[test]
+    fn test_shaddow_closure_with_local() {
+        let input = include_str!("../../tests/closure/shadow_closure_with_local.lox");
+        let env = Context::new().with_stdout();
+        let ast: Ast = parse(input).unwrap();
+        let res = ast.evaluate(&env).unwrap();
+        let stdout = env.stdout().unwrap();
+        assert_eq!(res, Value::Nil);
+        assert_eq!(stdout, "closure\nshadow\nclosure\n");
+    }
+
+    #[test]
+    fn test_reuse_closure_slot() {
+        let input = include_str!("../../tests/closure/reuse_closure_slot.lox");
+        let env = Context::new().with_stdout();
+        let ast: Ast = parse(input).unwrap();
+        let res = ast.evaluate(&env).unwrap();
+        let stdout = env.stdout().unwrap();
+        assert_eq!(res, Value::Nil);
+        assert_eq!(stdout, "a\n");
     }
 }

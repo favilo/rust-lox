@@ -1,4 +1,6 @@
 #![feature(debug_closure_helpers)]
+#![warn(clippy::all, clippy::pedantic)]
+#![allow(clippy::cast_precision_loss)]
 use std::{fs, path::PathBuf};
 
 use clap::{Parser, Subcommand};
@@ -59,7 +61,7 @@ fn main() {
                 eprintln!("Failed to parse file {}", res.unwrap_err());
                 std::process::exit(65);
             };
-            println!("{}", expr);
+            println!("{expr}");
         }
         Command::Evaluate(command) => {
             let filename = &command.file_name;
@@ -72,13 +74,13 @@ fn main() {
                 eprintln!("Failed to parse file {}", res.unwrap_err());
                 std::process::exit(65);
             };
-            let mut env = Context::new();
-            let res = expr.evaluate(&mut env);
+            let env = Context::new();
+            let res = expr.evaluate(&env);
             let Ok(result) = res else {
                 eprintln!("Failed to evaluate file {}", res.unwrap_err());
                 std::process::exit(70);
             };
-            println!("{}", result);
+            println!("{result}");
         }
         Command::Run(command) => {
             let filename = &command.file_name;
@@ -95,7 +97,7 @@ fn main() {
             if res.is_err() {
                 eprintln!("Failed to run file {}", res.unwrap_err());
                 std::process::exit(70);
-            };
+            }
         }
     }
 }

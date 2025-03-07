@@ -314,9 +314,9 @@ pub fn tokenize(input: &str) -> Result<(), error::Error<LocatingSlice<&str>>> {
     for token in &mut iter {
         match token {
             Token::Newline => {}
-            Token::Unexpected(_, _) | Token::Unterminated(_) => eprintln!("{}", token),
+            Token::Unexpected(_, _) | Token::Unterminated(_) => eprintln!("{token}"),
             Token::Eof => break,
-            _ => println!("{}", token),
+            _ => println!("{token}"),
         }
     }
     println!("{}", Token::Eof);

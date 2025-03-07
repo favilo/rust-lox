@@ -30,13 +30,13 @@ where
 {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::Winnow(input) => write!(f, "Winnow error at '{}'", input),
-            Self::Tokenize(message) => write!(f, "Tokenize error: {}", message),
+            Self::Winnow(input) => write!(f, "Winnow error at '{input}'"),
+            Self::Tokenize(message) => write!(f, "Tokenize error: {message}"),
             Self::External { cause, input } => {
-                write!(f, "External error at '{}': {}", input, cause)
+                write!(f, "External error at '{input}': {cause}")
             }
-            Self::Parse(err) => write!(f, "{}", err),
-            Self::Evaluate(err) => write!(f, "{}", err),
+            Self::Parse(err) => write!(f, "{err}"),
+            Self::Evaluate(err) => write!(f, "{err}"),
         }
     }
 }

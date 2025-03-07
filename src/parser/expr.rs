@@ -21,6 +21,8 @@ use crate::{
 
 use super::{parse_error, whitespace, Evaluate, Input, Value};
 
+const F64_PRECISION: f64 = 1e-10;
+
 #[derive(Debug, Clone, PartialEq)]
 pub enum Expr {
     Literal(Literal),
@@ -101,19 +103,19 @@ impl Evaluate for Expr {
 impl std::fmt::Display for Expr {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         match self {
-            Self::Literal(Literal::Number(n)) => write!(f, "{:?}", n),
-            Self::Literal(l) => write!(f, "{}", l),
-            Self::Variable(v, _scope) => write!(f, "{}", v),
-            Self::Unary(u) => write!(f, "{}", u),
-            Self::Binary(b) => write!(f, "{}", b),
-            Self::Group(e) => write!(f, "(group {})", e),
-            Self::Assignment(id, _depth, e) => write!(f, "(= {} {})", id, e),
+            Self::Literal(Literal::Number(n)) => write!(f, "{n:?}"),
+            Self::Literal(l) => write!(f, "{l}"),
+            Self::Variable(v, _scope) => write!(f, "{v}"),
+            Self::Unary(u) => write!(f, "{u}"),
+            Self::Binary(b) => write!(f, "{b}"),
+            Self::Group(e) => write!(f, "(group {e})"),
+            Self::Assignment(id, _depth, e) => write!(f, "(= {id} {e})"),
             Self::FnCall(expr, args) => {
                 write!(
                     f,
                     "({} {})",
                     expr,
-                    args.iter().map(|e| e.to_string()).collect::<String>()
+                    args.iter().map(ToString::to_string).collect::<String>()
                 )
             }
         }
@@ -483,8 +485,8 @@ impl Evaluate for Unary {
 impl std::fmt::Display for Unary {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         match self {
-            Self::Negate(e) => write!(f, "(- {})", e),
-            Self::Not(e) => write!(f, "(! {})", e),
+            Self::Negate(e) => write!(f, "(- {e})"),
+            Self::Not(e) => write!(f, "(! {e})"),
         }
     }
 }
@@ -511,128 +513,172 @@ impl Evaluate for Binary {
         's: 'ctx,
     {
         match self {
-            Self::Mul(l, r) => Ok(match (l.evaluate(env)?, r.evaluate(env)?) {
-                (Value::Number(l), Value::Number(r)) => Value::from(l * r),
-                _ => {
-                    return Err(EvaluateError::TypeMismatch {
-                        expected: "numbers".into(),
-                    })
-                }
-            }),
-            Self::Div(l, r) => Ok(match (l.evaluate(env)?, r.evaluate(env)?) {
-                (Value::Number(l), Value::Number(r)) => Value::from(l / r),
-                _ => {
-                    return Err(EvaluateError::TypeMismatch {
-                        expected: "numbers".into(),
-                    })
-                }
-            }),
-            Self::Add(l, r) => Ok(match (l.evaluate(env)?, r.evaluate(env)?) {
-                (Value::Number(l), Value::Number(r)) => Value::from(l + r),
-                (Value::String(s), Value::String(t)) => Value::from(format!("{}{}", s, t)),
-                _ => {
-                    return Err(EvaluateError::TypeMismatch {
-                        expected: "two numbers or two strings".into(),
-                    })
-                }
-            }),
-            Self::Sub(l, r) => Ok(match (l.evaluate(env)?, r.evaluate(env)?) {
-                (Value::Number(l), Value::Number(r)) => Value::from(l - r),
-                _ => {
-                    return Err(EvaluateError::TypeMismatch {
-                        expected: "numbers".into(),
-                    })
-                }
-            }),
-            Self::LessThan(l, r) => Ok(match (l.evaluate(env)?, r.evaluate(env)?) {
-                (Value::Number(l), Value::Number(r)) => Value::from(l < r),
-                _ => {
-                    return Err(EvaluateError::TypeMismatch {
-                        expected: "numbers".into(),
-                    })
-                }
-            }),
-            Self::GreaterThan(l, r) => Ok(match (l.evaluate(env)?, r.evaluate(env)?) {
-                (Value::Number(l), Value::Number(r)) => Value::from(l > r),
-                _ => {
-                    return Err(EvaluateError::TypeMismatch {
-                        expected: "numbers".into(),
-                    })
-                }
-            }),
-            Self::LessEq(l, r) => Ok(match (l.evaluate(env)?, r.evaluate(env)?) {
-                (Value::Number(l), Value::Number(r)) => Value::from(l <= r),
-                _ => {
-                    return Err(EvaluateError::TypeMismatch {
-                        expected: "numbers".into(),
-                    })
-                }
-            }),
-            Self::GreaterEq(l, r) => Ok(match (l.evaluate(env)?, r.evaluate(env)?) {
-                (Value::Number(l), Value::Number(r)) => Value::from(l >= r),
-                _ => {
-                    return Err(EvaluateError::TypeMismatch {
-                        expected: "numbers".into(),
-                    })
-                }
-            }),
-            Self::Equals(l, r) => Ok(match (l.evaluate(env)?, r.evaluate(env)?) {
-                (Value::Number(l), Value::Number(r)) => Value::from(l == r),
-                (Value::String(s), Value::String(t)) => Value::from(s == t),
-                (Value::Nil, Value::Nil) => Value::Bool(true),
-                (Value::Bool(true), Value::Bool(true)) => Value::Bool(true),
-                (Value::Bool(false), Value::Bool(false)) => Value::Bool(true),
-                _ => Value::Bool(false),
-            }),
-            Self::NotEquals(l, r) => Ok(match (l.evaluate(env)?, r.evaluate(env)?) {
-                (Value::Number(l), Value::Number(r)) => Value::from(l != r),
-                (Value::String(s), Value::String(t)) => Value::from(s != t),
-                (Value::Nil, Value::Nil) => Value::Bool(false),
-                (Value::Bool(true), Value::Bool(true)) => Value::Bool(false),
-                (Value::Bool(false), Value::Bool(false)) => Value::Bool(false),
-                _ => Value::Bool(true),
-            }),
-            Self::Or(l, r) => {
-                let a = l.evaluate(env)?;
-                log::debug!("Or: {a}");
-                Ok(if bool::from(&a) {
-                    a
-                } else {
-                    let b = r.evaluate(env)?;
-                    log::debug!("Or false: {b}");
-                    b
-                })
-            }
-            Self::And(l, r) => {
-                let a = l.evaluate(env)?;
-                log::debug!("And: {a}");
-                Ok(if bool::from(&a) {
-                    let b = r.evaluate(env)?;
-                    log::debug!("And true: {b}");
-                    b
-                } else {
-                    a
-                })
-            }
+            Self::Mul(l, r) => Self::eval_mul(l, env, r),
+            Self::Div(l, r) => Self::eval_div(l, env, r),
+            Self::Add(l, r) => Self::eval_add(l, env, r),
+            Self::Sub(l, r) => Self::eval_sub(l, env, r),
+            Self::LessThan(l, r) => Self::eval_less_than(l, env, r),
+            Self::GreaterThan(l, r) => Self::eval_greater_than(l, env, r),
+            Self::LessEq(l, r) => Self::eval_less_eq(l, env, r),
+            Self::GreaterEq(l, r) => Self::eval_greater_eq(l, env, r),
+            Self::Equals(l, r) => Self::eval_equals(l, env, r),
+            Self::NotEquals(l, r) => Self::eval_not_equals(l, env, r),
+            Self::Or(l, r) => Self::eval_or(l, env, r),
+            Self::And(l, r) => Self::eval_and(l, env, r),
         }
+    }
+}
+
+impl Binary {
+    fn eval_div(l: &Expr, env: &Context, r: &Expr) -> Result<Value, EvaluateError> {
+        Ok(match (l.evaluate(env)?, r.evaluate(env)?) {
+            (Value::Number(l), Value::Number(r)) => Value::from(l / r),
+            _ => {
+                return Err(EvaluateError::TypeMismatch {
+                    expected: "numbers".into(),
+                })
+            }
+        })
+    }
+
+    fn eval_mul(l: &Expr, env: &Context, r: &Expr) -> Result<Value, EvaluateError> {
+        Ok(match (l.evaluate(env)?, r.evaluate(env)?) {
+            (Value::Number(l), Value::Number(r)) => Value::from(l * r),
+            _ => {
+                return Err(EvaluateError::TypeMismatch {
+                    expected: "numbers".into(),
+                })
+            }
+        })
+    }
+
+    fn eval_sub(l: &Expr, env: &Context, r: &Expr) -> Result<Value, EvaluateError> {
+        Ok(match (l.evaluate(env)?, r.evaluate(env)?) {
+            (Value::Number(l), Value::Number(r)) => Value::from(l - r),
+            _ => {
+                return Err(EvaluateError::TypeMismatch {
+                    expected: "numbers".into(),
+                })
+            }
+        })
+    }
+
+    fn eval_add(l: &Expr, env: &Context, r: &Expr) -> Result<Value, EvaluateError> {
+        Ok(match (l.evaluate(env)?, r.evaluate(env)?) {
+            (Value::Number(l), Value::Number(r)) => Value::from(l + r),
+            (Value::String(s), Value::String(t)) => Value::from(format!("{s}{t}")),
+            _ => {
+                return Err(EvaluateError::TypeMismatch {
+                    expected: "two numbers or two strings".into(),
+                })
+            }
+        })
+    }
+
+    fn eval_greater_eq(l: &Expr, env: &Context, r: &Expr) -> Result<Value, EvaluateError> {
+        Ok(match (l.evaluate(env)?, r.evaluate(env)?) {
+            (Value::Number(l), Value::Number(r)) => Value::from(l >= r),
+            _ => {
+                return Err(EvaluateError::TypeMismatch {
+                    expected: "numbers".into(),
+                })
+            }
+        })
+    }
+
+    fn eval_less_eq(l: &Expr, env: &Context, r: &Expr) -> Result<Value, EvaluateError> {
+        Ok(match (l.evaluate(env)?, r.evaluate(env)?) {
+            (Value::Number(l), Value::Number(r)) => Value::from(l <= r),
+            _ => {
+                return Err(EvaluateError::TypeMismatch {
+                    expected: "numbers".into(),
+                })
+            }
+        })
+    }
+
+    fn eval_greater_than(l: &Expr, env: &Context, r: &Expr) -> Result<Value, EvaluateError> {
+        Ok(match (l.evaluate(env)?, r.evaluate(env)?) {
+            (Value::Number(l), Value::Number(r)) => Value::from(l > r),
+            _ => {
+                return Err(EvaluateError::TypeMismatch {
+                    expected: "numbers".into(),
+                })
+            }
+        })
+    }
+
+    fn eval_less_than(l: &Expr, env: &Context, r: &Expr) -> Result<Value, EvaluateError> {
+        Ok(match (l.evaluate(env)?, r.evaluate(env)?) {
+            (Value::Number(l), Value::Number(r)) => Value::from(l < r),
+            _ => {
+                return Err(EvaluateError::TypeMismatch {
+                    expected: "numbers".into(),
+                })
+            }
+        })
+    }
+
+    fn eval_and(l: &Expr, env: &Context, r: &Expr) -> Result<Value, EvaluateError> {
+        let a = l.evaluate(env)?;
+        log::debug!("And: {a}");
+        Ok(if bool::from(&a) {
+            let b = r.evaluate(env)?;
+            log::debug!("And true: {b}");
+            b
+        } else {
+            a
+        })
+    }
+
+    fn eval_or(l: &Expr, env: &Context, r: &Expr) -> Result<Value, EvaluateError> {
+        let a = l.evaluate(env)?;
+        log::debug!("Or: {a}");
+        Ok(if bool::from(&a) {
+            a
+        } else {
+            let b = r.evaluate(env)?;
+            log::debug!("Or false: {b}");
+            b
+        })
+    }
+
+    fn eval_not_equals(l: &Expr, env: &Context, r: &Expr) -> Result<Value, EvaluateError> {
+        Ok(match (l.evaluate(env)?, r.evaluate(env)?) {
+            (Value::Number(l), Value::Number(r)) => Value::from((l - r).abs() > F64_PRECISION),
+            (Value::String(s), Value::String(t)) => Value::from(s != t),
+            (Value::Nil, Value::Nil) => Value::Bool(false),
+            (Value::Bool(l), Value::Bool(r)) if l == r => Value::Bool(false),
+            _ => Value::Bool(true),
+        })
+    }
+
+    fn eval_equals(l: &Expr, env: &Context, r: &Expr) -> Result<Value, EvaluateError> {
+        Ok(match (l.evaluate(env)?, r.evaluate(env)?) {
+            (Value::Number(l), Value::Number(r)) => Value::from((l - r).abs() < F64_PRECISION),
+            (Value::String(s), Value::String(t)) => Value::from(s == t),
+            (Value::Nil, Value::Nil) => Value::Bool(true),
+            (Value::Bool(l), Value::Bool(r)) if l == r => Value::Bool(true),
+            _ => Value::Bool(false),
+        })
     }
 }
 
 impl std::fmt::Display for Binary {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         match self {
-            Self::Mul(l, r) => write!(f, "(* {} {})", l, r),
-            Self::Div(l, r) => write!(f, "(/ {} {})", l, r),
-            Self::Add(l, r) => write!(f, "(+ {} {})", l, r),
-            Self::Sub(l, r) => write!(f, "(- {} {})", l, r),
-            Self::LessThan(l, r) => write!(f, "(< {} {})", l, r),
-            Self::GreaterThan(l, r) => write!(f, "(> {} {})", l, r),
-            Self::LessEq(l, r) => write!(f, "(<= {} {})", l, r),
-            Self::GreaterEq(l, r) => write!(f, "(>= {} {})", l, r),
-            Self::Equals(l, r) => write!(f, "(== {} {})", l, r),
-            Self::NotEquals(l, r) => write!(f, "(!= {} {})", l, r),
-            Self::Or(l, r) => write!(f, "(or {} {})", l, r),
-            Self::And(l, r) => write!(f, "(and {} {})", l, r),
+            Self::Mul(l, r) => write!(f, "(* {l} {r})"),
+            Self::Div(l, r) => write!(f, "(/ {l} {r})"),
+            Self::Add(l, r) => write!(f, "(+ {l} {r})"),
+            Self::Sub(l, r) => write!(f, "(- {l} {r})"),
+            Self::LessThan(l, r) => write!(f, "(< {l} {r})"),
+            Self::GreaterThan(l, r) => write!(f, "(> {l} {r})"),
+            Self::LessEq(l, r) => write!(f, "(<= {l} {r})"),
+            Self::GreaterEq(l, r) => write!(f, "(>= {l} {r})"),
+            Self::Equals(l, r) => write!(f, "(== {l} {r})"),
+            Self::NotEquals(l, r) => write!(f, "(!= {l} {r})"),
+            Self::Or(l, r) => write!(f, "(or {l} {r})"),
+            Self::And(l, r) => write!(f, "(and {l} {r})"),
         }
     }
 }
