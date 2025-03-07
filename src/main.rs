@@ -11,6 +11,8 @@ use crate::parser::{Evaluate, Run};
 mod error;
 mod interpreter;
 mod parser;
+#[cfg(test)]
+pub(crate) mod test_utils;
 mod token;
 
 #[derive(Debug, Parser)]

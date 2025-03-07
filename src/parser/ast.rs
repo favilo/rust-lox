@@ -447,6 +447,8 @@ pub fn parse(input: &str) -> Result<Ast, Error<'_, Input<'_>>> {
 mod tests {
     use super::*;
 
+    use crate::test_utils::test_std_lox_test;
+
     #[test]
     fn test_mul_div() {
         let input = "1 / 2 * 3;";
@@ -576,36 +578,43 @@ print true;
         assert_eq!(res, Value::Nil);
     }
 
-    #[test]
-    fn test_nested_closure() {
-        let input = include_str!("../../tests/closure/nested_closure.lox");
-        let env = Context::new().with_stdout();
-        let ast: Ast = parse(input).unwrap();
-        let res = ast.evaluate(&env).unwrap();
-        let stdout = env.stdout().unwrap();
-        assert_eq!(res, Value::Nil);
-        assert_eq!(stdout, "a\nb\nc\n");
-    }
+    mod closure {
+        use super::*;
 
-    #[test]
-    fn test_shaddow_closure_with_local() {
-        let input = include_str!("../../tests/closure/shadow_closure_with_local.lox");
-        let env = Context::new().with_stdout();
-        let ast: Ast = parse(input).unwrap();
-        let res = ast.evaluate(&env).unwrap();
-        let stdout = env.stdout().unwrap();
-        assert_eq!(res, Value::Nil);
-        assert_eq!(stdout, "closure\nshadow\nclosure\n");
-    }
+        // Classes required
+        // test_std_lox_test!(close_over_method_parameter, closure, Value::Nil, "a\n");
 
-    #[test]
-    fn test_reuse_closure_slot() {
-        let input = include_str!("../../tests/closure/reuse_closure_slot.lox");
-        let env = Context::new().with_stdout();
-        let ast: Ast = parse(input).unwrap();
-        let res = ast.evaluate(&env).unwrap();
-        let stdout = env.stdout().unwrap();
-        assert_eq!(res, Value::Nil);
-        assert_eq!(stdout, "a\n");
+        test_std_lox_test!(unused_later_closure, closure, Value::Nil, "a\n");
+        test_std_lox_test!(unused_closure, closure, Value::Nil, "ok\n");
+        test_std_lox_test!(reference_closure_multiple_times, closure, Value::Nil, "a\na\n");
+        test_std_lox_test!(open_closure_in_function, closure, Value::Nil, "local\n");
+        test_std_lox_test!(closed_closure_in_function, closure, Value::Nil, "local\n");
+        test_std_lox_test!(close_over_later_variable, closure, Value::Nil, "b\na\n");
+        test_std_lox_test!(
+            close_over_function_parameter,
+            closure,
+            Value::Nil,
+            "param\n"
+        );
+        test_std_lox_test!(
+            assign_to_shadowed_later,
+            closure,
+            Value::Nil,
+            "inner\nassigned\n"
+        );
+        test_std_lox_test!(
+            assign_to_closure,
+            closure,
+            Value::Nil,
+            "local\nafter f\nafter f\nafter g\n"
+        );
+        test_std_lox_test!(nested_closure, closure, Value::Nil, "a\nb\nc\n");
+        test_std_lox_test!(
+            shadow_closure_with_local,
+            closure,
+            Value::Nil,
+            "closure\nshadow\nclosure\n"
+        );
+        test_std_lox_test!(reuse_closure_slot, closure, Value::Nil, "a\n");
     }
 }
