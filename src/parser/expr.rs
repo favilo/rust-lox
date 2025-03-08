@@ -13,7 +13,7 @@ use winnow::{
 };
 
 use crate::{
-    error::{Error, EvaluateError, ParseErrorType},
+    error::{Error, EvaluateError, ParseError, ParseErrorType},
     interpreter::Context,
     parser::{
         ast::Statement,
@@ -150,146 +150,77 @@ impl Expr {
         Ok(Expr::Assignment(name, depth, Box::new(e)))
     }
 
-    pub fn logical_or<'s>(input: &mut Input<'s>) -> ModalResult<Expr, Error<Input<'s>>> {
-        let init = trace("First comparison", Expr::logical_and).parse_next(input)?;
+    fn generic_oper<'s, Ex, Op, Op2>(
+        mut inner: Ex,
+        mut oper_begin: Op,
+        mut oper_end: Op2,
+    ) -> impl Parser<Input<'s>, Expr, ErrMode<Error<Input<'s>>>>
+    where
+        Ex: Parser<Input<'s>, Expr, ErrMode<Error<Input<'s>>>>,
+        // + for<'a> Fn(&'a mut Input<'s>) -> ModalResult<Expr, Error<Input<'s>>>,
+        // Ex: for<'a> Fn(&'a mut Input<'s>) -> ModalResult<Expr, Error<Input<'s>>>,
+        // Op: Fn(&mut Input<'s>) -> ModalResult<<Input<'s> as Stream>::Slice, Error<Input<'s>>>,
+        Op: Parser<Input<'s>, <Input<'s> as Stream>::Slice, ErrMode<Error<Input<'s>>>>,
+        Op2: Parser<Input<'s>, <Input<'s> as Stream>::Slice, ErrMode<Error<Input<'s>>>>,
+    {
+        move |input: &mut Input<'s>| {
+            let init = inner.parse_next(input)?;
 
-        trace(
-            "rest of logical_or",
-            repeat(
+            let v = repeat(
                 0..,
                 (
-                    "or",
-                    or_parse_error(Expr::logical_and, ParseErrorType::Expected("expression")),
+                    trace("oper_begin", |input: &mut Input<'s>| {
+                        oper_begin.parse_next(input)
+                    }),
+                    or_parse_error(
+                        |input: &mut Input<'s>| inner.parse_next(input),
+                        ParseErrorType::Expected("expression"),
+                    ),
+                    trace("oper_end", |input: &mut Input<'s>| {
+                        oper_end.parse_next(input)
+                    }),
                 ),
             )
             .fold(
                 move || init.clone(),
-                |acc, (_, val): (<Input as Stream>::Slice, Expr)| {
-                    Expr::Binary(Binary::Or(Box::new(acc), Box::new(val)))
+                |acc,
+                 (op_begin, val, _op_end): (
+                    <Input as Stream>::Slice,
+                    Expr,
+                    <Input as Stream>::Slice,
+                )| {
+                    Expr::Binary(
+                        Binary::from_oper(op_begin, acc, val).expect("all operators are correct"),
+                    )
                 },
-            ),
-        )
-        .parse_next(input)
+            )
+            .parse_next(input)?;
+            Ok(v)
+        }
+    }
+
+    pub fn logical_or<'s>(input: &mut Input<'s>) -> ModalResult<Expr, Error<Input<'s>>> {
+        Self::generic_oper(Expr::logical_and, "or", "").parse_next(input)
     }
 
     pub fn logical_and<'s>(input: &mut Input<'s>) -> ModalResult<Expr, Error<Input<'s>>> {
-        let init = trace("First comparison", Expr::equality).parse_next(input)?;
-
-        trace(
-            "rest of logical_and",
-            repeat(
-                0..,
-                (
-                    "and",
-                    or_parse_error(Expr::equality, ParseErrorType::Expected("expression")),
-                ),
-            )
-            .fold(
-                move || init.clone(),
-                |acc, (_, val): (<Input as Stream>::Slice, Expr)| {
-                    Expr::Binary(Binary::And(Box::new(acc), Box::new(val)))
-                },
-            ),
-        )
-        .parse_next(input)
+        Self::generic_oper(Expr::equality, "and", "").parse_next(input)
     }
 
     pub fn equality<'s>(input: &mut Input<'s>) -> ModalResult<Expr, Error<Input<'s>>> {
-        let init = trace("First comparison", Expr::comparison).parse_next(input)?;
-
-        trace(
-            "rest of equality",
-            repeat(
-                0..,
-                (
-                    alt(("==", "!=")),
-                    or_parse_error(Expr::comparison, ParseErrorType::Expected("expression")),
-                ),
-            )
-            .fold(
-                move || init.clone(),
-                |acc, (op, val): (<Input as Stream>::Slice, Expr)| match op.as_bstr() {
-                    b"==" => Expr::Binary(Binary::Equals(Box::new(acc), Box::new(val))),
-                    b"!=" => Expr::Binary(Binary::NotEquals(Box::new(acc), Box::new(val))),
-                    _ => unreachable!(),
-                },
-            ),
-        )
-        .parse_next(input)
+        Self::generic_oper(Expr::comparison, alt(("==", "!=")), "").parse_next(input)
     }
 
     pub fn comparison<'s>(input: &mut Input<'s>) -> ModalResult<Expr, Error<Input<'s>>> {
-        let init = trace("First term", Expr::term).parse_next(input)?;
-
-        trace(
-            "rest of comparison",
-            repeat(
-                0..,
-                (
-                    alt(("<=", ">=", "<", ">")),
-                    or_parse_error(Expr::term, ParseErrorType::Expected("expression")),
-                ),
-            )
-            .fold(
-                move || init.clone(),
-                |acc, (op, val): (<Input as Stream>::Slice, Expr)| match op.as_bstr() {
-                    b"<=" => Expr::Binary(Binary::LessEq(Box::new(acc), Box::new(val))),
-                    b">=" => Expr::Binary(Binary::GreaterEq(Box::new(acc), Box::new(val))),
-                    b"<" => Expr::Binary(Binary::LessThan(Box::new(acc), Box::new(val))),
-                    b">" => Expr::Binary(Binary::GreaterThan(Box::new(acc), Box::new(val))),
-                    _ => unreachable!(),
-                },
-            ),
-        )
-        .parse_next(input)
+        Self::generic_oper(Expr::term, alt(("<=", ">=", "<", ">")), "").parse_next(input)
     }
 
     pub fn term<'s>(input: &mut Input<'s>) -> ModalResult<Expr, Error<Input<'s>>> {
-        let init = trace("First factor", Expr::factor).parse_next(input)?;
-
-        trace(
-            "rest of term",
-            repeat(
-                0..,
-                (
-                    one_of(['+', '-']),
-                    or_parse_error(Expr::factor, ParseErrorType::Expected("expression")),
-                ),
-            )
-            .fold(
-                move || init.clone(),
-                |acc, (op, val): (<Input as Stream>::Token, Expr)| match op.as_char() {
-                    '+' => Expr::Binary(Binary::Add(Box::new(acc), Box::new(val))),
-                    '-' => Expr::Binary(Binary::Sub(Box::new(acc), Box::new(val))),
-                    _ => unreachable!(),
-                },
-            ),
-        )
-        .parse_next(input)
+        Self::generic_oper(Expr::factor, one_of(['+', '-']).take(), "").parse_next(input)
     }
 
     pub fn factor<'s>(input: &mut Input<'s>) -> ModalResult<Expr, Error<Input<'s>>> {
-        let init = trace("First unary", Expr::unary).parse_next(input)?;
-
-        trace(
-            "rest of factor",
-            repeat(
-                0..,
-                (
-                    one_of(['*', '/']),
-                    or_parse_error(Expr::unary, ParseErrorType::Expected("expression")),
-                ),
-            )
-            .fold(
-                move || init.clone(),
-                |acc, (op, val): (<Input as Stream>::Token, Expr)| match op.as_char() {
-                    '*' => Expr::Binary(Binary::Mul(Box::new(acc), Box::new(val))),
-                    '/' => Expr::Binary(Binary::Div(Box::new(acc), Box::new(val))),
-                    _ => unreachable!(),
-                },
-            ),
-        )
-        .parse_next(input)
+        Self::generic_oper(Expr::unary, one_of(['*', '/']).take(), "").parse_next(input)
     }
 
     pub fn unary<'s>(input: &mut Input<'s>) -> ModalResult<Expr, Error<Input<'s>>> {
@@ -643,6 +574,32 @@ impl Binary {
             (Value::Nil, Value::Nil) => Value::Bool(true),
             (Value::Bool(l), Value::Bool(r)) if l == r => Value::Bool(true),
             _ => Value::Bool(false),
+        })
+    }
+
+    fn from_oper<'s>(op_begin: &str, l: Expr, r: Expr) -> Result<Binary, Error<Input<'s>>> {
+        let l = Box::new(l);
+        let r = Box::new(r);
+        Ok(match op_begin {
+            "or" => Binary::Or(l, r),
+            "and" => Binary::And(l, r),
+            "==" => Binary::Equals(l, r),
+            "!=" => Binary::NotEquals(l, r),
+            ">=" => Binary::GreaterEq(l, r),
+            "<=" => Binary::LessEq(l, r),
+            ">" => Binary::GreaterThan(l, r),
+            "<" => Binary::LessThan(l, r),
+            "+" => Binary::Add(l, r),
+            "-" => Binary::Sub(l, r),
+            "*" => Binary::Mul(l, r),
+            "/" => Binary::Div(l, r),
+            _ => {
+                return Err(Error::Parse(ParseError::new(
+                    ParseErrorType::InvalidOperator,
+                    op_begin,
+                    &Stateful::new("", State::default()),
+                )));
+            }
         })
     }
 }

@@ -45,6 +45,7 @@ where
 pub enum ParseErrorType {
     Expected(&'static str),
     UndefinedVariable(String),
+    InvalidOperator,
 }
 
 impl Display for ParseErrorType {
@@ -52,6 +53,7 @@ impl Display for ParseErrorType {
         match self {
             ParseErrorType::Expected(s) => write!(f, "Expect {s}."),
             ParseErrorType::UndefinedVariable(name) => write!(f, "Undefined variable: `{name}`"),
+            ParseErrorType::InvalidOperator => write!(f, "Invalid operator"),
         }
     }
 }
