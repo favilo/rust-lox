@@ -16,7 +16,6 @@ use crate::{
 use super::{
     Evaluate, Input, Run, Stateful, Value,
     expr::{Expr, Literal},
-    parse_error,
     state::State,
 };
 
@@ -227,11 +226,8 @@ impl Statement {
     fn function<'s>(input: &mut Input<'s>) -> ModalResult<Statement, Error<Input<'s>>> {
         full_word("fun").parse_next(input)?;
 
-        let name = alt((
-            Expr::identifier,
-            parse_error(ParseErrorType::Expected("identifier")),
-        ))
-        .parse_next(input)?;
+        let name = or_parse_error(Expr::identifier, ParseErrorType::Expected("identifier"))
+            .parse_next(input)?;
         input
             .state
             .declare(&name)
@@ -308,7 +304,7 @@ impl Statement {
             opt(Expr::parser),
             _: space_wrap(";"),
             opt(Expr::parser),
-            _: space_wrap(alt((")", parse_error(ParseErrorType::Expected("')'"))))),
+            _: space_wrap(or_parse_error(")", ParseErrorType::Expected("')'"))),
             Self::stmt,
         }
         .map(
@@ -336,9 +332,9 @@ impl Statement {
         )
             .parse_next(input)?;
         seq! {
-            alt((Expr::parser, parse_error(ParseErrorType::Expected("expression")))),
+            or_parse_error(Expr::parser, ParseErrorType::Expected("expression")),
             _: (space_wrap(or_parse_error(")", ParseErrorType::Expected("')'")))),
-            alt((Self::stmt, parse_error(ParseErrorType::Expected("expression")))),
+            or_parse_error(Self::stmt, ParseErrorType::Expected("expression")),
         }
         .map(|(condition, stmt)| Statement::While(condition, Box::new(stmt)))
         .parse_next(input)
@@ -381,7 +377,7 @@ impl Statement {
     fn var_decl<'s>(input: &mut Input<'s>) -> ModalResult<Statement, Error<Input<'s>>> {
         full_word("var").parse_next(input)?;
         let (id, var) = seq! {
-            alt((Expr::identifier, parse_error(ParseErrorType::Expected("variable name")))),
+            or_parse_error(Expr::identifier, ParseErrorType::Expected("variable name")),
             opt(space_wrap("=").void()),
         }
         .parse_next(input)?;
@@ -392,7 +388,7 @@ impl Statement {
 
         let expr = if var.is_some() {
             let (expr,) = seq! {
-                alt((Expr::parser, parse_error(ParseErrorType::Expected("expression")))),
+                or_parse_error(Expr::parser, ParseErrorType::Expected("expression")),
             }
             .parse_next(input)?;
             expr
