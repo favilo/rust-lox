@@ -2,11 +2,12 @@ use std::sync::Arc;
 
 use ast::Statement;
 use winnow::{
+    ModalResult, Parser,
+    ascii::alpha1,
     combinator::{alt, delimited, eof, opt, preceded, repeat, repeat_till, trace},
     error::ErrMode,
     stream::Stream,
     token::{any, one_of, take_till},
-    ModalResult, Parser,
 };
 
 use crate::{
@@ -32,7 +33,7 @@ pub trait Run {
     fn run(&self) -> Result<(), EvaluateError>;
 }
 
-pub fn comment<'s>(input: &mut Input<'s>) -> ModalResult<(), Error<'s, Input<'s>>>
+pub fn comment<'s>(input: &mut Input<'s>) -> ModalResult<(), Error<Input<'s>>>
 where
     for<'a> Input<'a>: Stream<Token = char>,
 {
@@ -48,7 +49,7 @@ where
     .parse_next(input)
 }
 
-pub fn tracking_new_line<'s>(input: &mut Input<'s>) -> ModalResult<(), Error<'s, Input<'s>>>
+pub fn tracking_new_line<'s>(input: &mut Input<'s>) -> ModalResult<(), Error<Input<'s>>>
 where
     for<'a> Input<'a>: Stream<Token = char>,
 {
@@ -57,7 +58,7 @@ where
     Ok(())
 }
 
-pub fn whitespace<'s>(input: &mut Input<'s>) -> ModalResult<(), Error<'s, Input<'s>>> {
+pub fn whitespace<'s>(input: &mut Input<'s>) -> ModalResult<(), Error<Input<'s>>> {
     trace(
         "tracking_multispace",
         repeat::<_, _, (), _, _>(
@@ -68,29 +69,43 @@ pub fn whitespace<'s>(input: &mut Input<'s>) -> ModalResult<(), Error<'s, Input<
     .parse_next(input)
 }
 
-pub fn whitespace1<'s>(input: &mut Input<'s>) -> ModalResult<(), Error<'s, Input<'s>>> {
-    trace(
-        "tracking_multispace",
-        repeat::<_, _, (), _, _>(
-            1..,
-            alt((one_of([' ', '\t', '\r']).void(), comment, tracking_new_line)),
-        ),
-    )
-    .parse_next(input)
-}
-
 pub fn parse_error<'s, Output>(
     ty: ParseErrorType,
-) -> impl Parser<Input<'s>, Output, ErrMode<Error<'s, Input<'s>>>> {
+) -> impl Parser<Input<'s>, Output, ErrMode<Error<Input<'s>>>> {
     trace("parse_error", move |input: &mut Input<'s>| {
         let token =
             preceded(whitespace, take_till(0.., ['\n', '\r', ' ', '\t'])).parse_next(input)?;
         Err(ErrMode::Cut(Error::Parse(ParseError::new(
             ty.clone(),
             token,
-            input.clone(),
+            input,
         ))))
     })
+}
+
+pub fn space_wrap<'s, Output, P>(
+    inner: P,
+) -> impl Parser<Input<'s>, Output, ErrMode<Error<Input<'s>>>>
+where
+    P: Parser<Input<'s>, Output, ErrMode<Error<Input<'s>>>>,
+{
+    delimited(whitespace, inner, whitespace)
+}
+
+pub fn or_parse_error<'s, Output, P>(
+    inner: P,
+    ty: ParseErrorType,
+) -> impl Parser<Input<'s>, Output, ErrMode<Error<Input<'s>>>>
+where
+    P: Parser<Input<'s>, Output, ErrMode<Error<Input<'s>>>>,
+{
+    alt((inner, parse_error(ty)))
+}
+
+pub fn full_word<'s>(
+    word: &'static str,
+) -> impl Parser<Input<'s>, <Input<'s> as Stream>::Slice, ErrMode<Error<Input<'s>>>> {
+    space_wrap(alpha1.verify(move |id: <Input as Stream>::Slice| id == word))
 }
 
 #[derive(Default, Clone)]

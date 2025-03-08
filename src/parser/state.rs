@@ -77,9 +77,9 @@ impl State {
     pub fn with_scope<'s, Output, P>(
         &'s mut self,
         mut f: P,
-    ) -> impl Parser<Input<'s>, Output, ErrMode<Error<'s, Input<'s>>>>
+    ) -> impl Parser<Input<'s>, Output, ErrMode<Error<Input<'s>>>>
     where
-        P: Parser<Input<'s>, Output, ErrMode<Error<'s, Input<'s>>>>,
+        P: Parser<Input<'s>, Output, ErrMode<Error<Input<'s>>>>,
     {
         trace("with_scope", move |input: &mut Input<'s>| {
             self.start_scope();
@@ -93,7 +93,7 @@ impl State {
         if self.scopes.is_empty() {
             return Ok(());
         }
-        let mut scope = self
+        let scope = self
             .scopes
             .get_mut(self.scopes.len() - 1)
             .expect("Always at least one scope");
@@ -108,7 +108,7 @@ impl State {
         if self.scopes.is_empty() {
             return Ok(());
         }
-        let mut scope = self
+        let scope = self
             .scopes
             .get_mut(self.scopes.len() - 1)
             .expect("Alwyas at least one scope");

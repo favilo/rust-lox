@@ -1,14 +1,14 @@
 use std::fmt::Display;
 
 use winnow::{
-    error::{AddContext, ErrMode, FromExternalError, ParserError},
+    error::{AddContext, FromExternalError, ParserError},
     stream::Stream,
 };
 
 use crate::parser::{Input, Value};
 
 #[derive(Debug)]
-pub enum Error<'s, S: Stream> {
+pub enum Error<S: Stream> {
     Winnow(S),
 
     Tokenize(String),
@@ -18,12 +18,12 @@ pub enum Error<'s, S: Stream> {
         input: S,
     },
 
-    Parse(ParseError<'s>),
+    Parse(ParseError),
 
     Evaluate(EvaluateError),
 }
 
-impl<S> Display for Error<'_, S>
+impl<S> Display for Error<S>
 where
     S: Stream + Display,
     S::Slice: Display,
@@ -57,26 +57,21 @@ impl Display for ParseErrorType {
 }
 
 #[derive(Debug)]
-pub struct ParseError<'s> {
+pub struct ParseError {
     pub ty: ParseErrorType,
-    pub token: <Input<'s> as Stream>::Slice,
-    pub input: Input<'s>,
+    pub token: String,
     pub line: usize,
 }
 
-impl<'s> ParseError<'s> {
-    pub fn new(ty: ParseErrorType, token: <Input<'s> as Stream>::Slice, input: Input<'s>) -> Self {
+impl ParseError {
+    pub fn new(ty: ParseErrorType, token: <Input as Stream>::Slice, input: &Input) -> Self {
         let line = input.state.line();
-        Self {
-            ty,
-            token,
-            input,
-            line,
-        }
+        let token = token.to_string();
+        Self { ty, token, line }
     }
 }
 
-impl Display for ParseError<'_> {
+impl Display for ParseError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(
             f,
@@ -86,19 +81,19 @@ impl Display for ParseError<'_> {
     }
 }
 
-impl<'s, S: Stream> From<ParseError<'s>> for Error<'s, S> {
-    fn from(err: ParseError<'s>) -> Self {
+impl<S: Stream> From<ParseError> for Error<S> {
+    fn from(err: ParseError) -> Self {
         Self::Parse(err)
     }
 }
 
-impl<'s, S: Stream> From<winnow::error::ParseError<S, Error<'s, S>>> for Error<'s, S> {
-    fn from(value: winnow::error::ParseError<S, Error<'s, S>>) -> Self {
+impl<S: Stream> From<winnow::error::ParseError<S, Error<S>>> for Error<S> {
+    fn from(value: winnow::error::ParseError<S, Error<S>>) -> Self {
         value.into_inner()
     }
 }
 
-impl<S> std::error::Error for Error<'_, S>
+impl<S> std::error::Error for Error<S>
 where
     S: Stream + Display,
     S::Slice: Display,
@@ -111,7 +106,7 @@ where
     }
 }
 
-impl<S: Stream + Clone> ParserError<S> for Error<'_, S> {
+impl<S: Stream + Clone> ParserError<S> for Error<S> {
     type Inner = Self;
 
     fn from_input(input: &S) -> Self {
@@ -123,7 +118,7 @@ impl<S: Stream + Clone> ParserError<S> for Error<'_, S> {
     }
 }
 
-impl<C, S: Stream> AddContext<S, C> for Error<'_, S> {
+impl<C, S: Stream> AddContext<S, C> for Error<S> {
     #[inline]
     fn add_context(
         self,
@@ -136,7 +131,7 @@ impl<C, S: Stream> AddContext<S, C> for Error<'_, S> {
 }
 
 impl<S: Stream + Clone, E: std::error::Error + Send + Sync + 'static> FromExternalError<S, E>
-    for Error<'_, S>
+    for Error<S>
 {
     #[inline]
     fn from_external_error(input: &S, e: E) -> Self {
@@ -160,7 +155,7 @@ pub enum EvaluateError {
     Return(Value),
 }
 
-impl From<EvaluateError> for Error<'_, Input<'_>> {
+impl From<EvaluateError> for Error<Input<'_>> {
     fn from(err: EvaluateError) -> Self {
         Error::Evaluate(err)
     }
@@ -184,7 +179,10 @@ impl Display for EvaluateError {
             }
             Self::NotCallable(v) => write!(f, "Expected callable, found {v:?}."),
             Self::Return(v) => write!(f, "Returned value: {v}."),
-            Self::CannotAssignToSelf(name) => write!(f, "Error at '{name}': Can't read local variable in its own initializer."),
+            Self::CannotAssignToSelf(name) => write!(
+                f,
+                "Error at '{name}': Can't read local variable in its own initializer."
+            ),
         }
     }
 }

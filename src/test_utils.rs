@@ -1,7 +1,8 @@
 macro_rules! include_test_file {
     ($folder:ident, $name:ident) => {
         include_str!(concat!(
-            "../../tests/",
+            manifest_dir_macros::path!("tests"),
+            "/",
             stringify!($folder),
             "/",
             stringify!($name),

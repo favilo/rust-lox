@@ -1,16 +1,15 @@
 use std::{
     hash::Hash,
     iter::{once, zip},
-    sync::Arc,
 };
 use winnow::{
-    ascii::{digit1, Caseless},
+    ModalResult, Parser,
+    ascii::{Caseless, digit1},
     combinator::{alt, cut_err, delimited, empty, fail, opt, preceded, repeat, terminated, trace},
     dispatch,
     error::{ErrMode, ParserError},
     stream::{AsBStr, AsChar, Compare, ParseSlice, Stream, StreamIsPartial},
     token::{any, one_of, take_till, take_while},
-    ModalResult, Parser,
 };
 
 use crate::{
@@ -22,7 +21,10 @@ use crate::{
     },
 };
 
-use super::{parse_error, whitespace, Evaluate, Input, Value};
+use super::{Evaluate, Input, Value, or_parse_error, space_wrap};
+
+#[cfg(test)]
+mod tests;
 
 const F64_PRECISION: f64 = 1e-10;
 
@@ -94,7 +96,7 @@ impl Evaluate for Expr {
                             _ => return Err(EvaluateError::FunctionBodyNotBlock(stmt.to_string())),
                         };
                         let result = stmts
-                            .into_iter()
+                            .iter()
                             .try_fold(Value::Nil, |_, stmt| stmt.evaluate(&fn_env));
                         if let Err(EvaluateError::Return(n)) = result {
                             Ok(n)
@@ -132,27 +134,23 @@ impl std::fmt::Display for Expr {
 }
 
 impl Expr {
-    pub fn parser<'s>(input: &mut Input<'s>) -> ModalResult<Self, Error<'s, Input<'s>>> {
+    pub fn parser<'s>(input: &mut Input<'s>) -> ModalResult<Self, Error<Input<'s>>> {
         trace(
             "expr",
-            delimited(
-                whitespace,
-                alt((Expr::assignment, Expr::logical_or)),
-                whitespace,
-            ),
+            space_wrap(alt((Expr::assignment, Expr::logical_or))),
         )
         .parse_next(input)
     }
 
-    pub fn assignment<'s>(input: &mut Input<'s>) -> ModalResult<Expr, Error<'s, Input<'s>>> {
-        let name = terminated(Self::identifier, (whitespace, "=", whitespace)).parse_next(input)?;
+    pub fn assignment<'s>(input: &mut Input<'s>) -> ModalResult<Expr, Error<Input<'s>>> {
+        let name = terminated(Self::identifier, space_wrap("=")).parse_next(input)?;
         let e = Expr::parser.parse_next(input)?;
         let depth = input.state.depth(&name);
         log::debug!("Assigning to variable [{name}] with depth {depth:?}");
         Ok(Expr::Assignment(name, depth, Box::new(e)))
     }
 
-    pub fn logical_or<'s>(input: &mut Input<'s>) -> ModalResult<Expr, Error<'s, Input<'s>>> {
+    pub fn logical_or<'s>(input: &mut Input<'s>) -> ModalResult<Expr, Error<Input<'s>>> {
         let init = trace("First comparison", Expr::logical_and).parse_next(input)?;
 
         trace(
@@ -161,10 +159,7 @@ impl Expr {
                 0..,
                 (
                     "or",
-                    alt((
-                        Expr::logical_and,
-                        parse_error(ParseErrorType::Expected("expression")),
-                    )),
+                    or_parse_error(Expr::logical_and, ParseErrorType::Expected("expression")),
                 ),
             )
             .fold(
@@ -177,7 +172,7 @@ impl Expr {
         .parse_next(input)
     }
 
-    pub fn logical_and<'s>(input: &mut Input<'s>) -> ModalResult<Expr, Error<'s, Input<'s>>> {
+    pub fn logical_and<'s>(input: &mut Input<'s>) -> ModalResult<Expr, Error<Input<'s>>> {
         let init = trace("First comparison", Expr::equality).parse_next(input)?;
 
         trace(
@@ -186,10 +181,7 @@ impl Expr {
                 0..,
                 (
                     "and",
-                    alt((
-                        Expr::equality,
-                        parse_error(ParseErrorType::Expected("expression")),
-                    )),
+                    or_parse_error(Expr::equality, ParseErrorType::Expected("expression")),
                 ),
             )
             .fold(
@@ -202,7 +194,7 @@ impl Expr {
         .parse_next(input)
     }
 
-    pub fn equality<'s>(input: &mut Input<'s>) -> ModalResult<Expr, Error<'s, Input<'s>>> {
+    pub fn equality<'s>(input: &mut Input<'s>) -> ModalResult<Expr, Error<Input<'s>>> {
         let init = trace("First comparison", Expr::comparison).parse_next(input)?;
 
         trace(
@@ -211,10 +203,7 @@ impl Expr {
                 0..,
                 (
                     alt(("==", "!=")),
-                    alt((
-                        Expr::comparison,
-                        parse_error(ParseErrorType::Expected("expression")),
-                    )),
+                    or_parse_error(Expr::comparison, ParseErrorType::Expected("expression")),
                 ),
             )
             .fold(
@@ -229,7 +218,7 @@ impl Expr {
         .parse_next(input)
     }
 
-    pub fn comparison<'s>(input: &mut Input<'s>) -> ModalResult<Expr, Error<'s, Input<'s>>> {
+    pub fn comparison<'s>(input: &mut Input<'s>) -> ModalResult<Expr, Error<Input<'s>>> {
         let init = trace("First term", Expr::term).parse_next(input)?;
 
         trace(
@@ -238,10 +227,7 @@ impl Expr {
                 0..,
                 (
                     alt(("<=", ">=", "<", ">")),
-                    alt((
-                        Expr::term,
-                        parse_error(ParseErrorType::Expected("expression")),
-                    )),
+                    or_parse_error(Expr::term, ParseErrorType::Expected("expression")),
                 ),
             )
             .fold(
@@ -258,7 +244,7 @@ impl Expr {
         .parse_next(input)
     }
 
-    pub fn term<'s>(input: &mut Input<'s>) -> ModalResult<Expr, Error<'s, Input<'s>>> {
+    pub fn term<'s>(input: &mut Input<'s>) -> ModalResult<Expr, Error<Input<'s>>> {
         let init = trace("First factor", Expr::factor).parse_next(input)?;
 
         trace(
@@ -267,10 +253,7 @@ impl Expr {
                 0..,
                 (
                     one_of(['+', '-']),
-                    alt((
-                        Expr::factor,
-                        parse_error(ParseErrorType::Expected("expression")),
-                    )),
+                    or_parse_error(Expr::factor, ParseErrorType::Expected("expression")),
                 ),
             )
             .fold(
@@ -285,7 +268,7 @@ impl Expr {
         .parse_next(input)
     }
 
-    pub fn factor<'s>(input: &mut Input<'s>) -> ModalResult<Expr, Error<'s, Input<'s>>> {
+    pub fn factor<'s>(input: &mut Input<'s>) -> ModalResult<Expr, Error<Input<'s>>> {
         let init = trace("First unary", Expr::unary).parse_next(input)?;
 
         trace(
@@ -294,10 +277,7 @@ impl Expr {
                 0..,
                 (
                     one_of(['*', '/']),
-                    alt((
-                        Expr::unary,
-                        parse_error(ParseErrorType::Expected("expression")),
-                    )),
+                    or_parse_error(Expr::unary, ParseErrorType::Expected("expression")),
                 ),
             )
             .fold(
@@ -312,7 +292,7 @@ impl Expr {
         .parse_next(input)
     }
 
-    pub fn unary<'s>(input: &mut Input<'s>) -> ModalResult<Expr, Error<'s, Input<'s>>> {
+    pub fn unary<'s>(input: &mut Input<'s>) -> ModalResult<Expr, Error<Input<'s>>> {
         #[derive(Debug, Clone, Copy)]
         enum Sign {
             Negate,
@@ -331,25 +311,21 @@ impl Expr {
         alt((
             trace(
                 "unary",
-                (
-                    delimited(whitespace, operator, whitespace),
-                    terminated(Expr::unary, whitespace),
-                )
-                    .map(|(neg, e)| match neg {
-                        Sign::Negate => Expr::Unary(Unary::Negate(Box::new(e))),
-                        Sign::Not => Expr::Unary(Unary::Not(Box::new(e))),
-                    }),
+                (space_wrap(operator), space_wrap(Expr::unary)).map(|(neg, e)| match neg {
+                    Sign::Negate => Expr::Unary(Unary::Negate(Box::new(e))),
+                    Sign::Not => Expr::Unary(Unary::Not(Box::new(e))),
+                }),
             ),
             trace("no unary", Expr::call),
         ))
         .parse_next(input)
     }
 
-    pub fn call<'s>(input: &mut Input<'s>) -> ModalResult<Expr, Error<'s, Input<'s>>> {
+    pub fn call<'s>(input: &mut Input<'s>) -> ModalResult<Expr, Error<Input<'s>>> {
         let init = Expr::primary(input)?;
         trace(
             "function calls",
-            repeat(0.., delimited("(", Expr::arguments, (")", whitespace))).fold(
+            repeat(0.., delimited("(", Expr::arguments, space_wrap(")"))).fold(
                 move || init.clone(),
                 |acc, args: Vec<Expr>| Expr::FnCall(Box::new(acc), args),
             ),
@@ -357,7 +333,7 @@ impl Expr {
         .parse_next(input)
     }
 
-    fn arguments<'s>(input: &mut Input<'s>) -> ModalResult<Vec<Expr>, Error<'s, Input<'s>>> {
+    fn arguments<'s>(input: &mut Input<'s>) -> ModalResult<Vec<Expr>, Error<Input<'s>>> {
         let head = trace("first argument", opt(Expr::parser)).parse_next(input)?;
         let Some(head) = head else {
             return Ok(vec![]);
@@ -365,37 +341,32 @@ impl Expr {
 
         let rest: Vec<Expr> = trace(
             "rest of arguments",
-            repeat(0.., preceded((whitespace, ","), Expr::parser)),
+            repeat(0.., preceded(space_wrap(","), Expr::parser)),
         )
         .parse_next(input)?;
         Ok(once(head).chain(rest).collect::<Vec<Expr>>())
     }
 
-    pub fn primary<'s>(input: &mut Input<'s>) -> ModalResult<Self, Error<'s, Input<'s>>> {
+    pub fn primary<'s>(input: &mut Input<'s>) -> ModalResult<Self, Error<Input<'s>>> {
         trace(
             "primary",
-            delimited(
-                whitespace,
-                alt((
-                    Expr::parenthesis,
-                    Self::variable,
-                    Literal::parser.map(Expr::Literal),
-                )),
-                whitespace,
-            ),
+            space_wrap(alt((
+                Expr::parenthesis,
+                Self::variable,
+                Literal::parser.map(Expr::Literal),
+            ))),
         )
         .parse_next(input)
     }
 
-    fn parenthesis<'s>(input: &mut Input<'s>) -> ModalResult<Self, Error<'s, Input<'s>>> {
+    fn parenthesis<'s>(input: &mut Input<'s>) -> ModalResult<Self, Error<Input<'s>>> {
         trace(
             "parenthesis",
             preceded(
-                "(",
-                delimited(
-                    whitespace,
-                    terminated(Self::parser, whitespace),
-                    alt((")", parse_error(ParseErrorType::Expected("expression")))),
+                space_wrap("("),
+                terminated(
+                    Self::parser,
+                    or_parse_error(space_wrap(")"), ParseErrorType::Expected("expression")),
                 ),
             ),
         )
@@ -403,7 +374,7 @@ impl Expr {
         .parse_next(input)
     }
 
-    pub(crate) fn word<'s>(input: &mut Input<'s>) -> ModalResult<String, Error<'s, Input<'s>>> {
+    pub(crate) fn word<'s>(input: &mut Input<'s>) -> ModalResult<String, Error<Input<'s>>> {
         trace(
             "word",
             (
@@ -422,7 +393,7 @@ impl Expr {
         .parse_next(input)
     }
 
-    fn variable<'s>(input: &mut Input<'s>) -> ModalResult<Expr, Error<'s, Input<'s>>> {
+    fn variable<'s>(input: &mut Input<'s>) -> ModalResult<Expr, Error<Input<'s>>> {
         let name = Self::identifier.parse_next(input)?;
         if input.state.is_declared(&name) {
             return Err(ErrMode::Cut(Error::from(
@@ -435,9 +406,7 @@ impl Expr {
         Ok(Expr::Variable(name, depth))
     }
 
-    pub(crate) fn identifier<'s>(
-        input: &mut Input<'s>,
-    ) -> ModalResult<String, Error<'s, Input<'s>>> {
+    pub(crate) fn identifier<'s>(input: &mut Input<'s>) -> ModalResult<String, Error<Input<'s>>> {
         let id = trace("identifier", Self::word).parse_next(input)?;
         if matches!(
             id.as_ref(),
@@ -484,7 +453,7 @@ impl Evaluate for Unary {
                 _ => {
                     return Err(EvaluateError::TypeMismatch {
                         expected: "number".into(),
-                    })
+                    });
                 }
             }),
             Self::Not(e) => Ok(match e.evaluate(env)? {
@@ -550,7 +519,7 @@ impl Binary {
             _ => {
                 return Err(EvaluateError::TypeMismatch {
                     expected: "numbers".into(),
-                })
+                });
             }
         })
     }
@@ -561,7 +530,7 @@ impl Binary {
             _ => {
                 return Err(EvaluateError::TypeMismatch {
                     expected: "numbers".into(),
-                })
+                });
             }
         })
     }
@@ -572,7 +541,7 @@ impl Binary {
             _ => {
                 return Err(EvaluateError::TypeMismatch {
                     expected: "numbers".into(),
-                })
+                });
             }
         })
     }
@@ -584,7 +553,7 @@ impl Binary {
             _ => {
                 return Err(EvaluateError::TypeMismatch {
                     expected: "two numbers or two strings".into(),
-                })
+                });
             }
         })
     }
@@ -595,7 +564,7 @@ impl Binary {
             _ => {
                 return Err(EvaluateError::TypeMismatch {
                     expected: "numbers".into(),
-                })
+                });
             }
         })
     }
@@ -606,7 +575,7 @@ impl Binary {
             _ => {
                 return Err(EvaluateError::TypeMismatch {
                     expected: "numbers".into(),
-                })
+                });
             }
         })
     }
@@ -617,7 +586,7 @@ impl Binary {
             _ => {
                 return Err(EvaluateError::TypeMismatch {
                     expected: "numbers".into(),
-                })
+                });
             }
         })
     }
@@ -628,7 +597,7 @@ impl Binary {
             _ => {
                 return Err(EvaluateError::TypeMismatch {
                     expected: "numbers".into(),
-                })
+                });
             }
         })
     }
@@ -730,11 +699,7 @@ impl PartialEq for Literal {
 
 impl From<bool> for Literal {
     fn from(b: bool) -> Self {
-        if b {
-            Self::True
-        } else {
-            Self::False
-        }
+        if b { Self::True } else { Self::False }
     }
 }
 
@@ -796,20 +761,16 @@ impl Evaluate for Literal {
 }
 
 impl Literal {
-    pub(crate) fn parser<'s>(input: &mut Input<'s>) -> ModalResult<Self, Error<'s, Input<'s>>> {
+    pub(crate) fn parser<'s>(input: &mut Input<'s>) -> ModalResult<Self, Error<Input<'s>>> {
         trace(
             "literal",
-            delimited(
-                whitespace,
-                alt((
-                    "true".value(Self::True),
-                    "false".value(Self::False),
-                    "nil".value(Self::Nil),
-                    Self::number,
-                    Self::string,
-                )),
-                whitespace,
-            ),
+            space_wrap(alt((
+                "true".value(Self::True),
+                "false".value(Self::False),
+                "nil".value(Self::Nil),
+                Self::number,
+                Self::string,
+            ))),
         )
         .parse_next(input)
     }
@@ -872,145 +833,6 @@ impl std::fmt::Display for Literal {
     }
 }
 
-pub fn parse(input: &str) -> Result<Expr, Error<'_, Input<'_>>> {
+pub fn parse(input: &str) -> Result<Expr, Error<Input<'_>>> {
     Ok(Expr::parser.parse(Stateful::new(input, State::new(1)))?)
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    #[test]
-    fn test_bool() -> anyhow::Result<()> {
-        let input = "true\n";
-        let res = parse(input).unwrap();
-        assert_eq!(res, Expr::Literal(Literal::True));
-
-        let input = "false   \t";
-        let res = parse(input).unwrap();
-        assert_eq!(res, Expr::Literal(Literal::False));
-        Ok(())
-    }
-
-    #[test]
-    fn test_nil() -> anyhow::Result<()> {
-        let input = "     nil   ";
-        let res = parse(input).unwrap();
-        assert_eq!(res, Expr::Literal(Literal::Nil));
-        Ok(())
-    }
-
-    #[test]
-    fn test_number() -> anyhow::Result<()> {
-        let input = "123.45";
-        let res = parse(input).unwrap();
-        assert_eq!(res, Expr::Literal(Literal::Number(123.45)));
-        Ok(())
-    }
-
-    #[test]
-    fn test_string() -> anyhow::Result<()> {
-        let input = "\n \"hello, world!\"";
-        let res = parse(input).unwrap();
-        assert_eq!(
-            res,
-            Expr::Literal(Literal::String("hello, world!".to_string()))
-        );
-        Ok(())
-    }
-
-    #[test]
-    fn test_unary() -> anyhow::Result<()> {
-        let input = "-123.45    ";
-        let res = parse(input).unwrap();
-        assert_eq!(
-            res,
-            Expr::Unary(Unary::Negate(Box::new(Expr::Literal(Literal::Number(
-                123.45
-            )))))
-        );
-
-        Ok(())
-    }
-
-    #[test]
-    fn test_paren() -> anyhow::Result<()> {
-        let input = "  !(  -123.45  )\t\n";
-        let res = parse(input).unwrap();
-        assert_eq!(
-            res,
-            Expr::Unary(Unary::Not(Box::new(Expr::Group(Box::new(Expr::Unary(
-                Unary::Negate(Box::new(Expr::Literal(Literal::Number(123.45))))
-            ))))))
-        );
-
-        Ok(())
-    }
-
-    #[test]
-    fn test_term() -> anyhow::Result<()> {
-        let input = "123.45 * 67.89 / 10.11";
-        let res = parse(input).unwrap();
-        assert_eq!(
-            res,
-            Expr::Binary(Binary::Div(
-                Box::new(Expr::Binary(Binary::Mul(
-                    Box::new(Expr::Literal(Literal::Number(123.45))),
-                    Box::new(Expr::Literal(Literal::Number(67.89)))
-                ))),
-                Box::new(Expr::Literal(Literal::Number(10.11)))
-            ))
-        );
-
-        Ok(())
-    }
-
-    #[test]
-    fn test_term_codecrafters() -> anyhow::Result<()> {
-        let input = "(76 * -50 / (56 * 42))";
-        let res = parse(input).unwrap();
-        assert_eq!(
-            res.to_string(),
-            "(group (/ (* 76.0 (- 50.0)) (group (* 56.0 42.0))))",
-        );
-
-        Ok(())
-    }
-
-    #[test]
-    fn test_add_sub_codecrafters() {
-        let input = "(72 * -62 / (42 * 98))";
-        let res = parse(input).unwrap();
-        assert_eq!(
-            res.to_string(),
-            "(group (/ (* 72.0 (- 62.0)) (group (* 42.0 98.0))))",
-        );
-    }
-
-    #[test]
-    fn test_hello_plus_world() {
-        let input = r#""hello" + "world""#;
-        let res = parse(input).unwrap();
-        assert_eq!(res.to_string(), "(+ hello world)",);
-    }
-
-    #[test]
-    fn test_comparison() {
-        let input = "83 < 99 < 115";
-        let res = parse(input).unwrap();
-        assert_eq!(res.to_string(), "(< (< 83.0 99.0) 115.0)");
-    }
-
-    #[test]
-    fn test_parse_error() -> anyhow::Result<()> {
-        let input = "(
-            72 +
-            )";
-        let res = parse(input);
-        assert!(res.is_err());
-        assert_eq!(
-            res.unwrap_err().to_string(),
-            "[line 3] Error at ')': Expect expression."
-        );
-        Ok(())
-    }
 }
