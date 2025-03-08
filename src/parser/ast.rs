@@ -1,4 +1,4 @@
-use std::{iter::once, sync::Arc};
+use std::{iter::once, rc::Rc};
 
 use winnow::{
     ModalResult, Parser,
@@ -40,12 +40,12 @@ impl std::fmt::Display for Ast {
 pub enum Statement {
     Expr(Expr),
     Print(Expr),
-    Var(String, Option<usize>, Expr),
-    Block(Arc<[Statement]>),
-    If(Expr, Box<Statement>, Option<Box<Statement>>),
-    While(Expr, Box<Statement>),
-    For(Option<Box<Statement>>, Expr, Option<Expr>, Box<Statement>),
-    Function(String, Vec<String>, Arc<Statement>),
+    Var(Rc<str>, Option<usize>, Expr),
+    Block(Rc<[Statement]>),
+    If(Expr, Rc<Statement>, Option<Rc<Statement>>),
+    While(Expr, Rc<Statement>),
+    For(Option<Rc<Statement>>, Expr, Option<Expr>, Rc<Statement>),
+    Function(Rc<str>, Rc<[Rc<str>]>, Rc<Statement>),
     Return(Expr),
 }
 
@@ -184,7 +184,7 @@ impl Evaluate for Statement {
                     return Err(EvaluateError::FunctionBodyNotBlock(name.to_string()));
                 }
                 let value =
-                    Value::Callable(name.to_string(), params.clone(), body.clone(), env.clone());
+                    Value::Callable(name.clone(), params.clone(), body.clone(), env.clone());
                 let depth = env.depth();
                 log::debug!("define: {name} = {value:#?} with depth {depth:?}");
                 env.declare(name, value.clone(), depth)?;
@@ -260,13 +260,13 @@ impl Statement {
         input.state.end_scope();
         log::debug!("Exiting function scope: {}", input.state.scope_len());
         Ok(Statement::Function(
-            name,
-            params,
+            name.into(),
+            params.into(),
             Statement::Block(body.statements.into()).into(),
         ))
     }
 
-    fn argument_names<'s>(input: &mut Input<'s>) -> ModalResult<Vec<String>, Error<Input<'s>>> {
+    fn argument_names<'s>(input: &mut Input<'s>) -> ModalResult<Vec<Rc<str>>, Error<Input<'s>>> {
         let head = trace("first argument", opt(Expr::identifier)).parse_next(input)?;
         let Some(head) = head else {
             return Ok(vec![]);
@@ -277,7 +277,7 @@ impl Statement {
             repeat(0.., preceded(space_wrap(","), Expr::identifier)),
         )
         .parse_next(input)?;
-        Ok(once(head).chain(rest).collect::<Vec<String>>())
+        Ok(once(head).chain(rest).map(Into::into).collect::<Vec<_>>())
     }
 
     fn stmt<'s>(input: &mut Input<'s>) -> ModalResult<Statement, Error<Input<'s>>> {
@@ -315,10 +315,10 @@ impl Statement {
                 Statement,
             )| {
                 Statement::For(
-                    init.map(Box::new),
+                    init.map(Rc::new),
                     condition.unwrap_or(Expr::Literal(Literal::from(true))),
                     increment,
-                    Box::new(body),
+                    Rc::new(body),
                 )
             },
         )
@@ -336,7 +336,7 @@ impl Statement {
             _: (space_wrap(or_parse_error(")", ParseErrorType::Expected("')'")))),
             or_parse_error(Self::stmt, ParseErrorType::Expected("expression")),
         }
-        .map(|(condition, stmt)| Statement::While(condition, Box::new(stmt)))
+        .map(|(condition, stmt)| Statement::While(condition, Rc::new(stmt)))
         .parse_next(input)
     }
 
@@ -353,7 +353,7 @@ impl Statement {
             opt(preceded(full_word("else"), Self::stmt)),
         }
         .map(|(condition, true_s, false_s)| {
-            Statement::If(condition, Box::new(true_s), false_s.map(Box::new))
+            Statement::If(condition, Rc::new(true_s), false_s.map(Rc::new))
         })
         .parse_next(input)
     }
@@ -401,7 +401,7 @@ impl Statement {
             .map_err(|e| ErrMode::Cut(Error::from(e)))?;
         let depth = input.state.depth(&id);
         log::debug!("Declaring variable [{id}] with depth {depth:?}");
-        let var = Statement::Var(id, depth, expr);
+        let var = Statement::Var(id.into(), depth, expr);
         space_wrap(or_parse_error(";", ParseErrorType::Expected("';'")))
             .void()
             .parse_next(input)?;

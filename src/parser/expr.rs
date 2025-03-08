@@ -1,6 +1,7 @@
 use std::{
     hash::Hash,
     iter::{once, zip},
+    rc::Rc,
 };
 use winnow::{
     ModalResult, Parser,
@@ -32,11 +33,11 @@ const F64_PRECISION: f64 = 1e-10;
 pub enum Expr {
     Literal(Literal),
     Variable(String, Option<usize>),
-    Group(Box<Expr>),
+    Group(Rc<Expr>),
     Unary(Unary),
     Binary(Binary),
-    Assignment(String, Option<usize>, Box<Expr>),
-    FnCall(Box<Expr>, Vec<Expr>),
+    Assignment(Rc<str>, Option<usize>, Rc<Expr>),
+    FnCall(Rc<Expr>, Rc<[Expr]>),
 }
 
 impl Evaluate for Expr {
@@ -147,7 +148,7 @@ impl Expr {
         let e = Expr::parser.parse_next(input)?;
         let depth = input.state.depth(&name);
         log::debug!("Assigning to variable [{name}] with depth {depth:?}");
-        Ok(Expr::Assignment(name, depth, Box::new(e)))
+        Ok(Expr::Assignment(name.into(), depth, Rc::new(e)))
     }
 
     fn generic_oper<'s, Ex, Op, Op2>(
@@ -243,8 +244,8 @@ impl Expr {
             trace(
                 "unary",
                 (space_wrap(operator), space_wrap(Expr::unary)).map(|(neg, e)| match neg {
-                    Sign::Negate => Expr::Unary(Unary::Negate(Box::new(e))),
-                    Sign::Not => Expr::Unary(Unary::Not(Box::new(e))),
+                    Sign::Negate => Expr::Unary(Unary::Negate(Rc::new(e))),
+                    Sign::Not => Expr::Unary(Unary::Not(Rc::new(e))),
                 }),
             ),
             trace("no unary", Expr::call),
@@ -258,7 +259,7 @@ impl Expr {
             "function calls",
             repeat(0.., delimited("(", Expr::arguments, space_wrap(")"))).fold(
                 move || init.clone(),
-                |acc, args: Vec<Expr>| Expr::FnCall(Box::new(acc), args),
+                |acc, args: Vec<Expr>| Expr::FnCall(Rc::new(acc), args.into()),
             ),
         )
         .parse_next(input)
@@ -301,7 +302,7 @@ impl Expr {
                 ),
             ),
         )
-        .map(|e| Self::Group(Box::new(e)))
+        .map(|e| Self::Group(Rc::new(e)))
         .parse_next(input)
     }
 
@@ -369,8 +370,8 @@ impl Expr {
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Unary {
-    Negate(Box<Expr>),
-    Not(Box<Expr>),
+    Negate(Rc<Expr>),
+    Not(Rc<Expr>),
 }
 
 impl Evaluate for Unary {
@@ -407,18 +408,18 @@ impl std::fmt::Display for Unary {
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Binary {
-    Mul(Box<Expr>, Box<Expr>),
-    Div(Box<Expr>, Box<Expr>),
-    Add(Box<Expr>, Box<Expr>),
-    Sub(Box<Expr>, Box<Expr>),
-    LessThan(Box<Expr>, Box<Expr>),
-    GreaterThan(Box<Expr>, Box<Expr>),
-    LessEq(Box<Expr>, Box<Expr>),
-    GreaterEq(Box<Expr>, Box<Expr>),
-    Equals(Box<Expr>, Box<Expr>),
-    NotEquals(Box<Expr>, Box<Expr>),
-    Or(Box<Expr>, Box<Expr>),
-    And(Box<Expr>, Box<Expr>),
+    Mul(Rc<Expr>, Rc<Expr>),
+    Div(Rc<Expr>, Rc<Expr>),
+    Add(Rc<Expr>, Rc<Expr>),
+    Sub(Rc<Expr>, Rc<Expr>),
+    LessThan(Rc<Expr>, Rc<Expr>),
+    GreaterThan(Rc<Expr>, Rc<Expr>),
+    LessEq(Rc<Expr>, Rc<Expr>),
+    GreaterEq(Rc<Expr>, Rc<Expr>),
+    Equals(Rc<Expr>, Rc<Expr>),
+    NotEquals(Rc<Expr>, Rc<Expr>),
+    Or(Rc<Expr>, Rc<Expr>),
+    And(Rc<Expr>, Rc<Expr>),
 }
 
 impl Evaluate for Binary {
@@ -578,8 +579,8 @@ impl Binary {
     }
 
     fn from_oper<'s>(op_begin: &str, l: Expr, r: Expr) -> Result<Binary, Error<Input<'s>>> {
-        let l = Box::new(l);
-        let r = Box::new(r);
+        let l = Rc::new(l);
+        let r = Rc::new(r);
         Ok(match op_begin {
             "or" => Binary::Or(l, r),
             "and" => Binary::And(l, r),
@@ -629,7 +630,7 @@ pub enum Literal {
     False,
     Nil,
     Number(f64),
-    String(String),
+    String(Rc<str>),
 }
 
 impl std::fmt::Debug for Literal {
@@ -668,13 +669,13 @@ impl From<f64> for Literal {
 
 impl From<&str> for Literal {
     fn from(s: &str) -> Self {
-        Self::String(s.to_string())
+        Self::String(s.into())
     }
 }
 
 impl From<String> for Literal {
     fn from(s: String) -> Self {
-        Self::String(s)
+        Self::String(s.into())
     }
 }
 
@@ -773,7 +774,7 @@ impl Literal {
             "string",
             preceded("\"", cut_err(terminated(take_till(0.., '"'), "\""))),
         )
-        .map(|s: S::Slice| Self::String(std::str::from_utf8(s.as_bstr()).unwrap().to_string()))
+        .map(|s: S::Slice| Self::String(std::str::from_utf8(s.as_bstr()).unwrap().into()))
         .parse_next(input)
     }
 }

@@ -1,4 +1,4 @@
-use std::sync::Arc;
+use std::{rc::Rc, sync::Arc};
 
 use ast::Statement;
 use winnow::{
@@ -114,9 +114,9 @@ pub enum Value {
     Nil,
     Bool(bool),
     Number(f64),
-    String(String),
+    String(Rc<str>),
     NativeCallable(usize, Arc<dyn Fn(Vec<Value>) -> Value>),
-    Callable(String, Vec<String>, Arc<Statement>, Context),
+    Callable(Rc<str>, Rc<[Rc<str>]>, Rc<Statement>, Context),
 }
 
 impl std::fmt::Debug for Value {
@@ -178,13 +178,13 @@ impl From<f64> for Value {
 
 impl From<&str> for Value {
     fn from(s: &str) -> Self {
-        Self::String(s.to_string())
+        Self::String(s.into())
     }
 }
 
 impl From<String> for Value {
     fn from(s: String) -> Self {
-        Self::String(s)
+        Self::String(s.into())
     }
 }
 
