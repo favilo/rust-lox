@@ -127,7 +127,7 @@ impl std::fmt::Debug for Value {
             Self::Number(n) => f.debug_tuple("Number").field(n).finish(),
             Self::String(s) => f.debug_tuple("String").field(s).finish(),
             Self::NativeCallable(i, _fn) => write!(f, "<native fn({i} args)>"),
-            Self::Callable(name, _args, _stmt, _env) => write!(f, "<fn {name}>"),
+            Self::Callable(name, args, _stmt, _env) => write!(f, "<fn {name} ({} args)>", args.len()),
         }
     }
 }
@@ -156,7 +156,7 @@ impl std::fmt::Display for Value {
             Self::Bool(b) => write!(f, "{b}"),
             Self::Number(n) => write!(f, "{n}"),
             Self::String(s) => write!(f, "{s}"),
-            Self::NativeCallable(n, _) => write!(f, "<native fn({n} args)>"),
+            Self::NativeCallable(_, _) => write!(f, "<native fn>"),
             Self::Callable(name, _args, _stmt, _env) => {
                 write!(f, "<fn {name}>")
             }

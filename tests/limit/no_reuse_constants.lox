@@ -34,3 +34,4 @@ fun f() {
 
   1; // Error at '1': Too many constants in one chunk.
 }
+nil;

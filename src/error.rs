@@ -46,6 +46,9 @@ pub enum ParseErrorType {
     Expected(&'static str),
     UndefinedVariable(String),
     InvalidOperator,
+    UnterminatedString,
+    TooManyArguments,
+    TooManyParameters,
 }
 
 impl Display for ParseErrorType {
@@ -54,6 +57,9 @@ impl Display for ParseErrorType {
             ParseErrorType::Expected(s) => write!(f, "Expect {s}."),
             ParseErrorType::UndefinedVariable(name) => write!(f, "Undefined variable: `{name}`"),
             ParseErrorType::InvalidOperator => write!(f, "Invalid operator"),
+            ParseErrorType::UnterminatedString => write!(f, "Unterminated string."),
+            ParseErrorType::TooManyArguments => write!(f, "Can't have more than 255 arguments."),
+            ParseErrorType::TooManyParameters => write!(f, "Can't have more than 255 parameters."),
         }
     }
 }
@@ -154,7 +160,10 @@ pub enum EvaluateError {
     ArgumentMismatch { expected: usize, got: usize },
     FunctionBodyNotBlock(String),
     NotCallable(Value),
+    TopLevelReturn,
     Return(Value),
+    StackOverflow,
+    TooLargeBody(usize),
 }
 
 impl From<EvaluateError> for Error<Input<'_>> {
@@ -185,6 +194,9 @@ impl Display for EvaluateError {
                 f,
                 "Error at '{name}': Can't read local variable in its own initializer."
             ),
+            Self::TopLevelReturn => write!(f, "Can't return from top-level code."),
+            Self::StackOverflow => write!(f, "Stack overflow."),
+            Self::TooLargeBody(size) => write!(f, "Block body too large: {size}"),
         }
     }
 }

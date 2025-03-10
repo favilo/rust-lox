@@ -6,6 +6,7 @@ use crate::{error::EvaluateError, parser::Value};
 pub struct Context {
     env: Rc<RefCell<Environment>>,
     stdout: Option<Rc<RefCell<String>>>,
+    stack_depth: Rc<RefCell<usize>>,
 }
 
 impl Context {
@@ -13,14 +14,28 @@ impl Context {
         Self {
             env: Rc::new(RefCell::new(Environment::new())),
             stdout: None,
+            stack_depth: Rc::default(),
         }
     }
 
-    pub fn with_stdout(&self) -> Self {
+    pub fn with_stdout(self) -> Self {
         Self {
             env: Rc::clone(&self.env),
             stdout: Some(Rc::default()),
+            stack_depth: self.stack_depth,
         }
+    }
+
+    pub fn stack_depth(&self) -> usize {
+        *self.stack_depth.borrow()
+    }
+
+    pub fn push_stack(&self) {
+        *self.stack_depth.borrow_mut() += 1;
+    }
+
+    pub fn pop_stack(&self) {
+        *self.stack_depth.borrow_mut() -= 1;
     }
 
     pub fn get(&self, name: &str, depth: Option<usize>) -> Result<Value, EvaluateError> {
@@ -48,6 +63,7 @@ impl Context {
                 parent: Some(Rc::clone(&self.env)),
             })),
             stdout: self.stdout.clone(),
+            stack_depth: self.stack_depth.clone(),
         }
     }
 

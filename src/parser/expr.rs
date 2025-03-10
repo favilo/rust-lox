@@ -6,7 +6,7 @@ use std::{
 use winnow::{
     ModalResult, Parser,
     ascii::{Caseless, digit1},
-    combinator::{alt, cut_err, delimited, empty, fail, opt, preceded, repeat, terminated, trace},
+    combinator::{alt, delimited, empty, fail, opt, preceded, repeat, terminated, trace},
     dispatch,
     error::{ErrMode, ParserError},
     stream::{AsBStr, AsChar, Compare, ParseSlice, Stream, StreamIsPartial},
@@ -81,6 +81,9 @@ impl Evaluate for Expr {
                     }
                     Value::Callable(_name, names, stmt, parent_env) => {
                         // TODO: Add currying
+                        if env.stack_depth() > 133 {
+                            return Err(EvaluateError::StackOverflow);
+                        }
                         if names.len() != args.len() {
                             return Err(EvaluateError::ArgumentMismatch {
                                 expected: names.len(),
@@ -96,9 +99,11 @@ impl Evaluate for Expr {
                             Statement::Block(stmts) => stmts.clone(),
                             _ => return Err(EvaluateError::FunctionBodyNotBlock(stmt.to_string())),
                         };
+                        env.push_stack();
                         let result = stmts
                             .iter()
                             .try_fold(Value::Nil, |_, stmt| stmt.evaluate(&fn_env));
+                        env.pop_stack();
                         if let Err(EvaluateError::Return(n)) = result {
                             Ok(n)
                         } else {
@@ -276,7 +281,15 @@ impl Expr {
             repeat(0.., preceded(space_wrap(","), Expr::parser)),
         )
         .parse_next(input)?;
-        Ok(once(head).chain(rest).collect::<Vec<Expr>>())
+        if rest.len() >= 255 {
+            Err(ErrMode::Cut(Error::from(ParseError::new(
+                ParseErrorType::TooManyArguments,
+                "",
+                input,
+            ))))
+        } else {
+            Ok(once(head).chain(rest).collect::<Vec<Expr>>())
+        }
     }
 
     pub fn primary<'s>(input: &mut Input<'s>) -> ModalResult<Self, Error<Input<'s>>> {
@@ -560,7 +573,12 @@ impl Binary {
 
     fn eval_not_equals(l: &Expr, env: &Context, r: &Expr) -> Result<Value, EvaluateError> {
         Ok(match (l.evaluate(env)?, r.evaluate(env)?) {
-            (Value::Number(l), Value::Number(r)) => Value::from((l - r).abs() > F64_PRECISION),
+            (Value::Number(l), Value::Number(r)) => {
+                if l.is_nan() || r.is_nan() {
+                    return Ok(Value::Bool(true));
+                }
+                Value::from((l - r).abs() > F64_PRECISION)
+            }
             (Value::String(s), Value::String(t)) => Value::from(s != t),
             (Value::Nil, Value::Nil) => Value::Bool(false),
             (Value::Bool(l), Value::Bool(r)) if l == r => Value::Bool(false),
@@ -570,7 +588,12 @@ impl Binary {
 
     fn eval_equals(l: &Expr, env: &Context, r: &Expr) -> Result<Value, EvaluateError> {
         Ok(match (l.evaluate(env)?, r.evaluate(env)?) {
-            (Value::Number(l), Value::Number(r)) => Value::from((l - r).abs() < F64_PRECISION),
+            (Value::Number(l), Value::Number(r)) => {
+                if l.is_nan() || r.is_nan() {
+                    return Ok(Value::Bool(false));
+                }
+                Value::from((l - r).abs() < F64_PRECISION)
+            }
             (Value::String(s), Value::String(t)) => Value::from(s == t),
             (Value::Nil, Value::Nil) => Value::Bool(true),
             (Value::Bool(l), Value::Bool(r)) if l == r => Value::Bool(true),
@@ -757,24 +780,18 @@ impl Literal {
         .parse_next(input)
     }
 
-    fn string<S, E>(input: &mut S) -> ModalResult<Self, E>
-    where
-        for<'a> S: Stream
-            + StreamIsPartial
-            + Compare<&'a str>
-            + Compare<Caseless<&'a str>>
-            + AsBStr
-            + Compare<char>,
-        S::Slice: Eq + Hash + AsBStr + ParseSlice<f64> + Clone,
-        S::Token: AsChar + Clone,
-        S::IterOffsets: Clone,
-        E: ParserError<S>,
-    {
+    fn string<'s>(input: &mut Input<'s>) -> ModalResult<Self, Error<Input<'s>>> {
         trace(
             "string",
-            preceded("\"", cut_err(terminated(take_till(0.., '"'), "\""))),
+            preceded(
+                "\"",
+                or_parse_error(
+                    terminated(take_till(0.., '"'), "\""),
+                    ParseErrorType::UnterminatedString,
+                ),
+            ),
         )
-        .map(|s: S::Slice| Self::String(std::str::from_utf8(s.as_bstr()).unwrap().into()))
+        .map(|s: <Input as Stream>::Slice| Self::String(s.into()))
         .parse_next(input)
     }
 }

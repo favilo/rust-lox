@@ -8,7 +8,7 @@ use winnow::{
 };
 
 use crate::{
-    error::{Error, EvaluateError, ParseErrorType},
+    error::{Error, EvaluateError, ParseError, ParseErrorType},
     interpreter::Context,
     parser::{full_word, or_parse_error, space_wrap},
 };
@@ -21,6 +21,8 @@ use super::{
 
 #[cfg(test)]
 mod tests;
+
+const BLOCK_LIMIT: usize = 32767;
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct Ast {
@@ -176,6 +178,10 @@ impl Evaluate for Statement {
             }
             Statement::Return(expr) => {
                 log::trace!("return: {}", expr);
+                let depth = env.depth();
+                if depth.is_none() {
+                    return Err(EvaluateError::TopLevelReturn);
+                }
                 Err(EvaluateError::Return(expr.evaluate(env)?))
             }
             Statement::Function(name, params, body) => {
@@ -208,7 +214,7 @@ impl Run for Ast {
 
 impl Ast {
     fn parser<'s>(input: &mut Input<'s>) -> ModalResult<Self, Error<Input<'s>>> {
-        repeat(0.., Statement::parser)
+        space_wrap(repeat(0.., Statement::parser))
             .map(|statements| Self { statements })
             .parse_next(input)
     }
@@ -220,12 +226,15 @@ impl Statement {
     }
 
     fn declaration<'s>(input: &mut Input<'s>) -> ModalResult<Statement, Error<Input<'s>>> {
-        alt((Self::function, Self::var_decl, Self::stmt)).parse_next(input)
+        alt((Self::func_decl, Self::var_decl, Self::stmt)).parse_next(input)
+    }
+
+    fn func_decl<'s>(input: &mut Input<'s>) -> ModalResult<Statement, Error<Input<'s>>> {
+        full_word("fun").parse_next(input)?;
+        Self::function.parse_next(input)
     }
 
     fn function<'s>(input: &mut Input<'s>) -> ModalResult<Statement, Error<Input<'s>>> {
-        full_word("fun").parse_next(input)?;
-
         let name = or_parse_error(Expr::identifier, ParseErrorType::Expected("identifier"))
             .parse_next(input)?;
         input
@@ -239,9 +248,9 @@ impl Statement {
             .map_err(|e| ErrMode::Cut(Error::from(e)))?;
 
         or_parse_error(space_wrap("("), ParseErrorType::Expected("'('")).parse_next(input)?;
-        let params = Self::argument_names.parse_next(input)?;
+        let params = Self::parameter_names.parse_next(input)?;
         input.state.start_scope();
-        log::debug!(
+        log::trace!(
             "Entering function params scope: {:?}",
             input.state.scopes().collect::<Vec<_>>()
         );
@@ -252,10 +261,19 @@ impl Statement {
                 input.state.define(param)
             })
             .map_err(|e| ErrMode::Cut(Error::from(e)))?;
-        or_parse_error(space_wrap(")"), ParseErrorType::Expected("')'")).parse_next(input)?;
+        or_parse_error(
+            space_wrap(")"),
+            ParseErrorType::Expected("')' after parameters"),
+        )
+        .parse_next(input)?;
         or_parse_error(space_wrap("{"), ParseErrorType::Expected("'{'")).parse_next(input)?;
         // Don't just use `Statement::block` because we don't want the extra scope
         let body = Ast::parser.parse_next(input)?;
+        if body.statements.len() > BLOCK_LIMIT {
+            return Err(ErrMode::Cut(Error::from(EvaluateError::TooLargeBody(
+                body.statements.len(),
+            ))));
+        }
         or_parse_error(space_wrap("}"), ParseErrorType::Expected("'}'")).parse_next(input)?;
         input.state.end_scope();
         log::debug!("Exiting function scope: {}", input.state.scope_len());
@@ -266,7 +284,7 @@ impl Statement {
         ))
     }
 
-    fn argument_names<'s>(input: &mut Input<'s>) -> ModalResult<Vec<Rc<str>>, Error<Input<'s>>> {
+    fn parameter_names<'s>(input: &mut Input<'s>) -> ModalResult<Vec<Rc<str>>, Error<Input<'s>>> {
         let head = trace("first argument", opt(Expr::identifier)).parse_next(input)?;
         let Some(head) = head else {
             return Ok(vec![]);
@@ -277,7 +295,15 @@ impl Statement {
             repeat(0.., preceded(space_wrap(","), Expr::identifier)),
         )
         .parse_next(input)?;
-        Ok(once(head).chain(rest).map(Into::into).collect::<Vec<_>>())
+        if rest.len() >= 255 {
+            Err(ErrMode::Cut(Error::from(ParseError::new(
+                ParseErrorType::TooManyParameters,
+                "",
+                input,
+            ))))
+        } else {
+            Ok(once(head).chain(rest).map(Into::into).collect::<Vec<_>>())
+        }
     }
 
     fn stmt<'s>(input: &mut Input<'s>) -> ModalResult<Statement, Error<Input<'s>>> {
@@ -299,30 +325,27 @@ impl Statement {
             space_wrap(or_parse_error("(", ParseErrorType::Expected("'('"))),
         )
             .parse_next(input)?;
-        seq! {
-            alt((alt((Self::var_decl , Self::expr_stmt)).map(Some), space_wrap(";").map(|_|None))),
-            opt(Expr::parser),
-            _: space_wrap(";"),
-            opt(Expr::parser),
-            _: space_wrap(or_parse_error(")", ParseErrorType::Expected("')'"))),
-            Self::stmt,
+        input.state.start_scope();
+        let init = opt(alt((Self::var_decl, Self::expr_stmt))).parse_next(input)?;
+        if init.is_none() {
+            space_wrap(or_parse_error(";", ParseErrorType::Expected("expression")))
+                .parse_next(input)?;
         }
-        .map(
-            |(init, condition, increment, body): (
-                Option<Statement>,
-                Option<Expr>,
-                Option<Expr>,
-                Statement,
-            )| {
-                Statement::For(
-                    init.map(Rc::new),
-                    condition.unwrap_or(Expr::Literal(Literal::from(true))),
-                    increment,
-                    Rc::new(body),
-                )
-            },
-        )
-        .parse_next(input)
+        let condition = opt(Expr::parser).parse_next(input)?;
+        space_wrap(or_parse_error(";", ParseErrorType::Expected("expression")))
+            .parse_next(input)?;
+        let increment = opt(Expr::parser).parse_next(input)?;
+        space_wrap(or_parse_error(")", ParseErrorType::Expected("expression")))
+            .parse_next(input)?;
+        let body =
+            or_parse_error(Self::stmt, ParseErrorType::Expected("expression")).parse_next(input)?;
+        input.state.end_scope();
+        Ok(Statement::For(
+            init.map(Rc::new),
+            condition.unwrap_or(Expr::Literal(Literal::from(true))),
+            increment,
+            Rc::new(body),
+        ))
     }
 
     fn while_loop<'s>(input: &mut Input<'s>) -> ModalResult<Statement, Error<Input<'s>>> {
@@ -349,8 +372,8 @@ impl Statement {
         seq! {
             Expr::parser,
             _: space_wrap(or_parse_error(")", ParseErrorType::Expected("')'"))),
-            Self::stmt,
-            opt(preceded(full_word("else"), Self::stmt)),
+            or_parse_error(Self::stmt, ParseErrorType::Expected("expression")),
+            opt(preceded(full_word("else"), or_parse_error(Self::stmt, ParseErrorType::Expected("expression")))),
         }
         .map(|(condition, true_s, false_s)| {
             Statement::If(condition, Rc::new(true_s), false_s.map(Rc::new))
@@ -365,9 +388,15 @@ impl Statement {
             "Entering block scope: {:?}",
             input.state.scopes().collect::<Vec<_>>()
         );
-        let block = Ast::parser
-            .map(|ast| Statement::Block(ast.statements.into()))
-            .parse_next(input)?;
+        let ast = Ast::parser.parse_next(input)?;
+        let block = {
+            if ast.statements.len() > BLOCK_LIMIT {
+                return Err(ErrMode::Cut(Error::from(EvaluateError::TooLargeBody(
+                    ast.statements.len(),
+                ))));
+            }
+            Ok(Statement::Block(ast.statements.into()))
+        }?;
         log::debug!("Exiting block scope: {}", input.state.scope_len());
         input.state.end_scope();
         or_parse_error(space_wrap("}"), ParseErrorType::Expected("'}'")).parse_next(input)?;

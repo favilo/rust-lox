@@ -14,6 +14,7 @@ macro_rules! test_std_lox {
     ($name:ident, $folder:ident, $expected:expr, $stdout:expr) => {
         paste::paste! {
             #[test_log::test]
+            #[allow(non_snake_case)]
             fn [< test_ $name >]() {
                 let input = crate::test_utils::include_test_file!($folder, $name);
                 let env = Context::new().with_stdout();
@@ -31,6 +32,7 @@ macro_rules! test_std_lox_parse_error {
     ($name:ident, $folder:ident, $expected:expr) => {
         paste::paste! {
             #[test_log::test]
+            #[allow(non_snake_case)]
             fn [< test_ $name >]() {
                 let input = crate::test_utils::include_test_file!($folder, $name);
                 let res = parse(input);
@@ -45,6 +47,7 @@ macro_rules! test_std_lox_eval_error {
     ($name:ident, $folder:ident, $expected:expr) => {
         paste::paste! {
             #[test_log::test]
+            #[allow(non_snake_case)]
             fn [< test_ $name >]() {
                 let input = crate::test_utils::include_test_file!($folder, $name);
                 let ast = parse(input).unwrap();
