@@ -1,3 +1,4 @@
+use either::Either;
 use std::{
     hash::Hash,
     iter::{once, zip},
@@ -6,7 +7,7 @@ use std::{
 use winnow::{
     ModalResult, Parser,
     ascii::{Caseless, digit1},
-    combinator::{alt, delimited, empty, fail, opt, preceded, repeat, terminated, trace},
+    combinator::{alt, delimited, empty, fail, not, opt, preceded, repeat, terminated, trace},
     dispatch,
     error::{ErrMode, ParserError},
     stream::{AsBStr, AsChar, Compare, ParseSlice, Stream, StreamIsPartial},
@@ -17,12 +18,13 @@ use crate::{
     error::{Error, EvaluateError, ParseError, ParseErrorType},
     interpreter::Context,
     parser::{
+        Callable, NativeCallable,
         ast::Statement,
         state::{State, Stateful},
     },
 };
 
-use super::{Evaluate, Input, Value, or_parse_error, space_wrap};
+use super::{Evaluate, Input, Instance, NativeFn, Value, or_parse_error, space_wrap};
 
 #[cfg(test)]
 mod tests;
@@ -32,12 +34,15 @@ const F64_PRECISION: f64 = 1e-10;
 #[derive(Debug, Clone, PartialEq)]
 pub enum Expr {
     Literal(Literal),
-    Variable(String, Option<usize>),
+    Variable { name: String, depth: Option<usize> },
     Group(Rc<Expr>),
     Unary(Unary),
     Binary(Binary),
-    Assignment(Rc<str>, Option<usize>, Rc<Expr>),
-    FnCall(Rc<Expr>, Rc<[Expr]>),
+    Assignment(Assignment),
+    FnCall(FnCall),
+    GetProperty(GetProperty),
+    SetProperty(SetProperty),
+    This { depth: Option<usize> },
 }
 
 impl Evaluate for Expr {
@@ -46,73 +51,21 @@ impl Evaluate for Expr {
         's: 'ctx,
     {
         match self {
-            Self::Literal(l) => l.evaluate(env),
-            Self::Variable(v, depth) => {
-                log::trace!("Getting variable [{v}] with depth {depth:?}");
-                env.get(v, *depth)
+            Self::Literal(lit) => lit.evaluate(env),
+            Self::Variable { name, depth } => {
+                log::trace!("Getting variable [{name}] with depth {depth:?}");
+                env.get(name, *depth)
             }
-            Self::Group(e) => e.evaluate(env),
-            Self::Unary(u) => u.evaluate(env),
-            Self::Binary(b) => b.evaluate(env),
-            Self::Assignment(id, depth, e) => {
-                let value = e.evaluate(env)?;
-                log::trace!("Setting variable [{id}] to {value} with depth {depth:?}");
-                env.set(id, value.clone(), *depth)?;
-                Ok(value)
-            }
-            Self::FnCall(expr, args) => {
-                log::trace!("Function call: {expr}({args:#?})");
-                let args = args
-                    .iter()
-                    .map(|e| e.evaluate(env))
-                    .collect::<Result<Vec<_>, _>>()?;
-                let callable = expr.evaluate(env)?;
-                log::trace!("Callable: {callable}");
-                match callable {
-                    Value::NativeCallable(n, f) => {
-                        // TODO: Add currying
-                        if n != args.len() {
-                            return Err(EvaluateError::ArgumentMismatch {
-                                expected: n,
-                                got: args.len(),
-                            });
-                        }
-                        Ok(f(args))
-                    }
-                    Value::Callable(_name, names, stmt, parent_env) => {
-                        // TODO: Add currying
-                        if env.stack_depth() > 133 {
-                            return Err(EvaluateError::StackOverflow);
-                        }
-                        if names.len() != args.len() {
-                            return Err(EvaluateError::ArgumentMismatch {
-                                expected: names.len(),
-                                got: args.len(),
-                            });
-                        }
-                        let fn_env = parent_env.child();
-                        zip(names.iter(), args.iter()).try_for_each(|(name, arg)| {
-                            fn_env.declare(name, arg.clone(), Some(0))
-                        })?;
-                        log::trace!("Function env: {fn_env:#?}");
-                        let stmts = match stmt.as_ref() {
-                            Statement::Block(stmts) => stmts.clone(),
-                            _ => return Err(EvaluateError::FunctionBodyNotBlock(stmt.to_string())),
-                        };
-                        env.push_stack();
-                        let result = stmts
-                            .iter()
-                            .try_fold(Value::Nil, |_, stmt| stmt.evaluate(&fn_env));
-                        env.pop_stack();
-                        if let Err(EvaluateError::Return(n)) = result {
-                            Ok(n)
-                        } else {
-                            Ok(result?)
-                        }
-                    }
-                    _ => Err(EvaluateError::NotCallable(callable)),
-                }
-            }
+            Self::Group(block) => block.evaluate(env),
+            Self::Unary(unary) => unary.evaluate(env),
+            Self::Binary(binary) => binary.evaluate(env),
+            Self::Assignment(assign) => assign.evaluate(env),
+            Self::FnCall(fn_call) => fn_call.evaluate(env),
+            Self::GetProperty(prop) => prop.evaluate(env),
+            Self::SetProperty(prop) => prop.evaluate(env),
+            Self::This { depth } => env
+                .get("this", depth.to_owned())
+                .map_err(|_| EvaluateError::ThisOutsideClass),
         }
     }
 }
@@ -122,12 +75,19 @@ impl std::fmt::Display for Expr {
         match self {
             Self::Literal(Literal::Number(n)) => write!(f, "{n:?}"),
             Self::Literal(l) => write!(f, "{l}"),
-            Self::Variable(v, _scope) => write!(f, "{v}"),
+            Self::Variable { name, .. } => write!(f, "{name}"),
             Self::Unary(u) => write!(f, "{u}"),
             Self::Binary(b) => write!(f, "{b}"),
             Self::Group(e) => write!(f, "(group {e})"),
-            Self::Assignment(id, _depth, e) => write!(f, "(= {id} {e})"),
-            Self::FnCall(expr, args) => {
+            Self::Assignment(Assignment {
+                variable_name,
+                value: e,
+                ..
+            }) => write!(f, "(= {variable_name} {e})"),
+            Self::FnCall(FnCall {
+                fn_expr: expr,
+                params: args,
+            }) => {
                 write!(
                     f,
                     "({} {})",
@@ -135,6 +95,11 @@ impl std::fmt::Display for Expr {
                     args.iter().map(ToString::to_string).collect::<String>()
                 )
             }
+            Self::GetProperty(GetProperty { inst, field }) => write!(f, "(. {inst} {field})"),
+            Self::SetProperty(SetProperty { inst, field, value }) => {
+                write!(f, "(= (. {inst} {field}) {value})")
+            }
+            Self::This { .. } => write!(f, "this"),
         }
     }
 }
@@ -149,25 +114,45 @@ impl Expr {
     }
 
     pub fn assignment<'s>(input: &mut Input<'s>) -> ModalResult<Expr, Error<Input<'s>>> {
-        let name = terminated(Self::identifier, space_wrap("=")).parse_next(input)?;
-        let e = Expr::parser.parse_next(input)?;
-        let depth = input.state.depth(&name);
-        log::debug!("Assigning to variable [{name}] with depth {depth:?}");
-        Ok(Expr::Assignment(name.into(), depth, Rc::new(e)))
+        trace("assignment", move |input: &mut Input<'s>| {
+            let get_expr = Expr::call.parse_next(input)?;
+            space_wrap(terminated("=", not("="))).parse_next(input)?;
+            let value = Expr::parser.parse_next(input)?;
+            log::trace!("Assignment: {get_expr:?} = {value}");
+            match get_expr {
+                Expr::GetProperty(property) => {
+                    let set_property = Expr::SetProperty(SetProperty {
+                        inst: property.inst,
+                        field: property.field,
+                        value: Rc::new(value),
+                    });
+                    Ok(set_property)
+                }
+                Expr::Variable { name, depth } => {
+                    log::debug!("Assigning to variable [{name}] with depth {depth:?}");
+                    Ok(Expr::Assignment(Assignment {
+                        variable_name: name.into(),
+                        depth,
+                        value: Rc::new(value),
+                    }))
+                }
+                _ => Err(ErrMode::Cut(Error::from(ParseError::new(
+                    ParseErrorType::InvalidAssignment,
+                    "=",
+                    input,
+                )))),
+            }
+        })
+        .parse_next(input)
     }
 
-    fn generic_oper<'s, Ex, Op, Op2>(
+    fn generic_oper<'s, Ex, Op>(
         mut inner: Ex,
         mut oper_begin: Op,
-        mut oper_end: Op2,
     ) -> impl Parser<Input<'s>, Expr, ErrMode<Error<Input<'s>>>>
     where
         Ex: Parser<Input<'s>, Expr, ErrMode<Error<Input<'s>>>>,
-        // + for<'a> Fn(&'a mut Input<'s>) -> ModalResult<Expr, Error<Input<'s>>>,
-        // Ex: for<'a> Fn(&'a mut Input<'s>) -> ModalResult<Expr, Error<Input<'s>>>,
-        // Op: Fn(&mut Input<'s>) -> ModalResult<<Input<'s> as Stream>::Slice, Error<Input<'s>>>,
         Op: Parser<Input<'s>, <Input<'s> as Stream>::Slice, ErrMode<Error<Input<'s>>>>,
-        Op2: Parser<Input<'s>, <Input<'s> as Stream>::Slice, ErrMode<Error<Input<'s>>>>,
     {
         move |input: &mut Input<'s>| {
             let init = inner.parse_next(input)?;
@@ -182,19 +167,11 @@ impl Expr {
                         |input: &mut Input<'s>| inner.parse_next(input),
                         ParseErrorType::Expected("expression"),
                     ),
-                    trace("oper_end", |input: &mut Input<'s>| {
-                        oper_end.parse_next(input)
-                    }),
                 ),
             )
             .fold(
                 move || init.clone(),
-                |acc,
-                 (op_begin, val, _op_end): (
-                    <Input as Stream>::Slice,
-                    Expr,
-                    <Input as Stream>::Slice,
-                )| {
+                |acc, (op_begin, val): (<Input as Stream>::Slice, Expr)| {
                     Expr::Binary(
                         Binary::from_oper(op_begin, acc, val).expect("all operators are correct"),
                     )
@@ -206,27 +183,27 @@ impl Expr {
     }
 
     pub fn logical_or<'s>(input: &mut Input<'s>) -> ModalResult<Expr, Error<Input<'s>>> {
-        Self::generic_oper(Expr::logical_and, "or", "").parse_next(input)
+        Self::generic_oper(Expr::logical_and, space_wrap("or")).parse_next(input)
     }
 
     pub fn logical_and<'s>(input: &mut Input<'s>) -> ModalResult<Expr, Error<Input<'s>>> {
-        Self::generic_oper(Expr::equality, "and", "").parse_next(input)
+        Self::generic_oper(Expr::equality, space_wrap("and")).parse_next(input)
     }
 
     pub fn equality<'s>(input: &mut Input<'s>) -> ModalResult<Expr, Error<Input<'s>>> {
-        Self::generic_oper(Expr::comparison, alt(("==", "!=")), "").parse_next(input)
+        Self::generic_oper(Expr::comparison, space_wrap(alt(("==", "!=")))).parse_next(input)
     }
 
     pub fn comparison<'s>(input: &mut Input<'s>) -> ModalResult<Expr, Error<Input<'s>>> {
-        Self::generic_oper(Expr::term, alt(("<=", ">=", "<", ">")), "").parse_next(input)
+        Self::generic_oper(Expr::term, space_wrap(alt(("<=", ">=", "<", ">")))).parse_next(input)
     }
 
     pub fn term<'s>(input: &mut Input<'s>) -> ModalResult<Expr, Error<Input<'s>>> {
-        Self::generic_oper(Expr::factor, one_of(['+', '-']).take(), "").parse_next(input)
+        Self::generic_oper(Expr::factor, one_of(['+', '-']).take()).parse_next(input)
     }
 
     pub fn factor<'s>(input: &mut Input<'s>) -> ModalResult<Expr, Error<Input<'s>>> {
-        Self::generic_oper(Expr::unary, one_of(['*', '/']).take(), "").parse_next(input)
+        Self::generic_oper(Expr::unary, one_of(['*', '/']).take()).parse_next(input)
     }
 
     pub fn unary<'s>(input: &mut Input<'s>) -> ModalResult<Expr, Error<Input<'s>>> {
@@ -253,18 +230,41 @@ impl Expr {
                     Sign::Not => Expr::Unary(Unary::Not(Rc::new(e))),
                 }),
             ),
-            trace("no unary", Expr::call),
+            trace("no unary - call", Expr::call),
         ))
         .parse_next(input)
     }
 
     pub fn call<'s>(input: &mut Input<'s>) -> ModalResult<Expr, Error<Input<'s>>> {
         let init = Expr::primary(input)?;
+        let fn_call = delimited(
+            "(",
+            trace("call arguments", Expr::arguments),
+            or_parse_error(space_wrap(")"), ParseErrorType::Expected(")")),
+        )
+        .map(Either::Left);
+        let dot_property = preceded(
+            space_wrap("."),
+            or_parse_error(
+                Self::identifier,
+                ParseErrorType::Expected("property name after '.'"),
+            ),
+        )
+        .map(Either::Right);
         trace(
-            "function calls",
-            repeat(0.., delimited("(", Expr::arguments, space_wrap(")"))).fold(
+            "calls",
+            repeat(0.., alt((fn_call, dot_property))).fold(
                 move || init.clone(),
-                |acc, args: Vec<Expr>| Expr::FnCall(Rc::new(acc), args.into()),
+                |acc, next: Either<Vec<Expr>, String>| match next {
+                    Either::Left(args) => Expr::FnCall(FnCall {
+                        fn_expr: Rc::new(acc),
+                        params: args.into(),
+                    }),
+                    Either::Right(name) => Expr::GetProperty(GetProperty {
+                        inst: Rc::new(acc),
+                        field: name.into(),
+                    }),
+                },
             ),
         )
         .parse_next(input)
@@ -299,6 +299,7 @@ impl Expr {
                 Expr::parenthesis,
                 Self::variable,
                 Literal::parser.map(Expr::Literal),
+                Self::this,
             ))),
         )
         .parse_next(input)
@@ -338,6 +339,13 @@ impl Expr {
         .parse_next(input)
     }
 
+    fn this<'s>(input: &mut Input<'s>) -> ModalResult<Self, Error<Input<'s>>> {
+        space_wrap("this").parse_next(input)?;
+        let depth = input.state.depth("this");
+        log::debug!("Found [this] with depth {depth:?}");
+        Ok(Expr::This { depth })
+    }
+
     fn variable<'s>(input: &mut Input<'s>) -> ModalResult<Expr, Error<Input<'s>>> {
         let name = Self::identifier.parse_next(input)?;
         if input.state.is_declared(&name) {
@@ -348,7 +356,7 @@ impl Expr {
         let depth = input.state.depth(&name);
         log::debug!("Found variable [{name}] with depth {depth:?}");
 
-        Ok(Expr::Variable(name, depth))
+        Ok(Expr::Variable { name, depth })
     }
 
     pub(crate) fn identifier<'s>(input: &mut Input<'s>) -> ModalResult<String, Error<Input<'s>>> {
@@ -597,6 +605,8 @@ impl Binary {
             (Value::String(s), Value::String(t)) => Value::from(s == t),
             (Value::Nil, Value::Nil) => Value::Bool(true),
             (Value::Bool(l), Value::Bool(r)) if l == r => Value::Bool(true),
+            (Value::Class(l), Value::Class(r)) => Value::Bool(Rc::ptr_eq(&l, &r)),
+            (Value::Callable(l), Value::Callable(r)) => Value::Bool(l == r),
             _ => Value::Bool(false),
         })
     }
@@ -643,6 +653,182 @@ impl std::fmt::Display for Binary {
             Self::NotEquals(l, r) => write!(f, "(!= {l} {r})"),
             Self::Or(l, r) => write!(f, "(or {l} {r})"),
             Self::And(l, r) => write!(f, "(and {l} {r})"),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct Assignment {
+    pub variable_name: Rc<str>,
+    pub depth: Option<usize>,
+    pub value: Rc<Expr>,
+}
+
+impl Evaluate for Assignment {
+    fn evaluate<'s, 'ctx>(&'s self, env: &'ctx Context) -> Result<Value, EvaluateError>
+    where
+        's: 'ctx,
+    {
+        let value = self.value.evaluate(env)?;
+        let Assignment {
+            variable_name,
+            depth,
+            ..
+        } = self;
+        log::trace!("Setting variable [{variable_name}] to {value} with depth {depth:?}");
+        env.set(variable_name, value.clone(), *depth)?;
+        Ok(value)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct FnCall {
+    pub fn_expr: Rc<Expr>,
+    pub params: Rc<[Expr]>,
+}
+
+impl Evaluate for FnCall {
+    fn evaluate<'s, 'ctx>(&'s self, env: &'ctx Context) -> Result<Value, EvaluateError>
+    where
+        's: 'ctx,
+    {
+        let FnCall { fn_expr, params } = self;
+        log::trace!("Function call: {fn_expr}({params:#?})");
+        let param_values = params
+            .iter()
+            .map(|e| e.evaluate(env))
+            .collect::<Result<Vec<_>, _>>()?;
+        let callable = fn_expr.evaluate(env)?;
+        log::trace!("Callable: {callable}");
+        match callable {
+            Value::NativeCallable(NativeCallable { arg_num: n, func }) => {
+                Self::eval_native_fn(&param_values, n, &func, env)
+            }
+            Value::Callable(callable) => Self::eval_callable(&callable, &param_values, env),
+            Value::Class(class) => class.eval_class_call(&param_values, env),
+
+            _ => Err(EvaluateError::NotCallable(callable)),
+        }
+    }
+}
+
+impl FnCall {
+    fn eval_native_fn(
+        args: &[Value],
+        n: usize,
+        f: &NativeFn,
+        ctx: &Context,
+    ) -> Result<Value, EvaluateError> {
+        // TODO: Add currying
+        if n != args.len() {
+            return Err(EvaluateError::ArgumentMismatch {
+                expected: n,
+                got: args.len(),
+            });
+        }
+        Ok(f(args, ctx))
+    }
+
+    pub(crate) fn eval_callable(
+        callable: &Callable,
+        param_values: &[Value],
+        env: &Context,
+    ) -> Result<Value, EvaluateError> {
+        // TODO: Add currying
+        if env.stack_depth() > 133 {
+            return Err(EvaluateError::StackOverflow);
+        }
+        if callable.param_names.len() != param_values.len() {
+            return Err(EvaluateError::ArgumentMismatch {
+                expected: callable.param_names.len(),
+                got: param_values.len(),
+            });
+        }
+        let fn_env = callable.env.child();
+        zip(callable.param_names.iter(), param_values.iter())
+            .try_for_each(|(param, value)| fn_env.declare(param, value.clone(), Some(0)))?;
+        log::trace!("Function env: {fn_env:#?}");
+        let stmts = match callable.body.as_ref() {
+            Statement::Block(stmts) => stmts.clone(),
+            _ => {
+                return Err(EvaluateError::FunctionBodyNotBlock(
+                    callable.body.to_string(),
+                ));
+            }
+        };
+        env.push_stack();
+        let result = stmts
+            .iter()
+            .try_fold(Value::Nil, |_, stmt| stmt.evaluate(&fn_env));
+        env.pop_stack();
+        match (callable.initializer, result) {
+            (true, Ok(_) | Err(EvaluateError::Return(Value::Nil))) => {
+                log::trace!("Initializer returning 'this': {fn_env:#?}");
+                let this = fn_env.get("this", Some(1));
+                assert!(this.is_ok(), "No 'this' in initializer");
+                this
+            }
+            (true, Err(EvaluateError::Return(_))) => {
+                panic!("Returning from initializer should have been a parse error")
+            }
+            (false, Ok(r) | Err(EvaluateError::Return(r))) => Ok(r),
+            (_, e) => e,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct GetProperty {
+    pub inst: Rc<Expr>,
+    pub field: Rc<str>,
+}
+
+impl Evaluate for GetProperty {
+    fn evaluate<'s, 'ctx>(&'s self, env: &'ctx Context) -> Result<Value, EvaluateError>
+    where
+        's: 'ctx,
+    {
+        let GetProperty { inst, field } = self;
+        let instance = inst.evaluate(env)?;
+        match instance {
+            Value::Instance(Instance { fields, .. }) => {
+                let fields_borrow = fields.borrow();
+                let Some(value) = fields_borrow.get(field).cloned() else {
+                    return Err(EvaluateError::UndefinedProperty(field.to_string()));
+                };
+                Ok(value)
+            }
+            _ => Err(EvaluateError::TypeMismatch {
+                expected: "instance".into(),
+            }),
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct SetProperty {
+    inst: Rc<Expr>,
+    field: Rc<str>,
+    value: Rc<Expr>,
+}
+
+impl Evaluate for SetProperty {
+    fn evaluate<'s, 'ctx>(&'s self, env: &'ctx Context) -> Result<Value, EvaluateError>
+    where
+        's: 'ctx,
+    {
+        let SetProperty { inst, field, value } = self;
+        let instance = inst.evaluate(env)?;
+        match instance {
+            Value::Instance(Instance { fields, .. }) => {
+                let value = value.evaluate(env)?;
+                fields.borrow_mut().insert(field.clone(), value.clone());
+
+                Ok(value)
+            }
+            _ => Err(EvaluateError::TypeMismatch {
+                expected: "instance".into(),
+            }),
         }
     }
 }

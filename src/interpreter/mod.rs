@@ -1,12 +1,23 @@
 use std::{cell::RefCell, collections::HashMap, rc::Rc, sync::Arc, time::UNIX_EPOCH};
 
-use crate::{error::EvaluateError, parser::Value};
+use crate::{
+    error::EvaluateError,
+    parser::{NativeCallable, Value},
+};
 
 #[derive(Debug, Clone)]
 pub struct Context {
     env: Rc<RefCell<Environment>>,
     stdout: Option<Rc<RefCell<String>>>,
     stack_depth: Rc<RefCell<usize>>,
+}
+
+impl PartialEq for Context {
+    fn eq(&self, other: &Self) -> bool {
+        Rc::ptr_eq(&self.env, &other.env)
+            && self.stdout == other.stdout
+            && self.stack_depth == other.stack_depth
+    }
 }
 
 impl Context {
@@ -126,6 +137,15 @@ impl std::fmt::Debug for Environment {
         builder.finish()
     }
 }
+fn clock_fn(_: &[Value], _: &Context) -> Value {
+    Value::from(UNIX_EPOCH.elapsed().unwrap().as_secs_f64())
+}
+
+fn debug_value(args: &[Value], env: &Context) -> Value {
+    args.iter()
+        .for_each(|arg| env.print(&Value::String(format!("{arg:?}").into())));
+    Value::Nil
+}
 
 impl Environment {
     fn debug_helper(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -140,10 +160,17 @@ impl Environment {
         let mut globals = HashMap::default();
         globals.insert(
             "clock".into(),
-            Value::NativeCallable(
-                0,
-                Arc::new(|_| Value::from(UNIX_EPOCH.elapsed().unwrap().as_secs_f64())),
-            ),
+            Value::NativeCallable(NativeCallable {
+                arg_num: 0,
+                func: Arc::new(clock_fn),
+            }),
+        );
+        globals.insert(
+            "debug".into(),
+            Value::NativeCallable(NativeCallable {
+                arg_num: 1,
+                func: Arc::new(debug_value),
+            }),
         );
         Self {
             parent: None,
@@ -178,11 +205,17 @@ impl Environment {
 
     fn set(&mut self, name: &str, value: Value, depth: Option<usize>) -> Result<(), EvaluateError> {
         let Some(depth) = depth else {
-            self.globals.borrow_mut().insert(name.to_string(), value);
+            let mut borrow_mut = self.globals.borrow_mut();
+            *borrow_mut
+                .get_mut(name)
+                .ok_or_else(|| EvaluateError::UndefinedVariable(name.to_string()))? = value;
             return Ok(());
         };
         if depth == 0 {
-            self.stack.insert(name.to_string(), value);
+            *self
+                .stack
+                .get_mut(name)
+                .ok_or_else(|| EvaluateError::UndefinedVariable(name.to_string()))? = value;
             return Ok(());
         }
 

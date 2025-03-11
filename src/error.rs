@@ -20,7 +20,7 @@ pub enum Error<S: Stream> {
 
     Parse(ParseError),
 
-    Evaluate(EvaluateError),
+    Evaluate(Box<EvaluateError>),
 }
 
 impl<S> Display for Error<S>
@@ -45,6 +45,7 @@ where
 pub enum ParseErrorType {
     Expected(&'static str),
     UndefinedVariable(String),
+    InvalidAssignment,
     InvalidOperator,
     UnterminatedString,
     TooManyArguments,
@@ -60,6 +61,7 @@ impl Display for ParseErrorType {
             ParseErrorType::UnterminatedString => write!(f, "Unterminated string."),
             ParseErrorType::TooManyArguments => write!(f, "Can't have more than 255 arguments."),
             ParseErrorType::TooManyParameters => write!(f, "Can't have more than 255 parameters."),
+            ParseErrorType::InvalidAssignment => write!(f, "Invalid assignment target."),
         }
     }
 }
@@ -164,11 +166,15 @@ pub enum EvaluateError {
     Return(Value),
     StackOverflow,
     TooLargeBody(usize),
+    ClassMethodNotFunction(String),
+    UndefinedProperty(String),
+    ThisOutsideClass,
+    ReturnFromInitializer,
 }
 
 impl From<EvaluateError> for Error<Input<'_>> {
     fn from(err: EvaluateError) -> Self {
-        Error::Evaluate(err)
+        Error::Evaluate(Box::new(err))
     }
 }
 
@@ -197,6 +203,15 @@ impl Display for EvaluateError {
             Self::TopLevelReturn => write!(f, "Can't return from top-level code."),
             Self::StackOverflow => write!(f, "Stack overflow."),
             Self::TooLargeBody(size) => write!(f, "Block body too large: {size}"),
+            Self::ClassMethodNotFunction(name) => {
+                write!(f, "Error at '{name}': Class method must be a function.")
+            }
+            Self::UndefinedProperty(name) => write!(f, "Undefined property: '{name}'"),
+            Self::ThisOutsideClass => write!(f, "Can't use 'this' outside of a class."),
+            Self::ReturnFromInitializer => write!(
+                f,
+                "Error at 'return': Can't return a value from an initializer."
+            ),
         }
     }
 }

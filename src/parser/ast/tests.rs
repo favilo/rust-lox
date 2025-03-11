@@ -139,12 +139,31 @@ mod assignment {
     test_std_lox!(local, assignment, Value::Nil, "before\nafter\narg\narg\n");
     test_std_lox!(syntax, assignment, Value::Nil, "var\nvar\n");
 
-    // TODO: classes
-    // test_std_lox_parse_error!(grouping, assignment, "[line 2] Error at '=': Invalid assignement target.");
-    // test_std_lox_parse_error!(infix_operator, assignment, "[line 2] Error at '=': Invalid assignement target.");
-    // test_std_lox_parse_error!(prefix_operator, assignment, "[line 2] Error at '=': Invalid assignement target.");
-    // test_std_lox_parse_error!(to_this, assignment, "[line 2] Error at '=': Invalid assignement target.");
-    // test_std_lox_eval_error!(undefined, assignment, EvaluateError::UndefinedProperty("bar".into()));
+    test_std_lox_parse_error!(
+        grouping,
+        assignment,
+        "[line 2] Error at '=': Invalid assignment target."
+    );
+    test_std_lox_parse_error!(
+        infix_operator,
+        assignment,
+        "[line 3] Error at '=': Expect ';'."
+    );
+    test_std_lox_parse_error!(
+        prefix_operator,
+        assignment,
+        "[line 2] Error at '=': Expect ';'."
+    );
+    test_std_lox_parse_error!(
+        to_this,
+        assignment,
+        "[line 3] Error at '=': Invalid assignment target."
+    );
+    test_std_lox_eval_error!(
+        undefined,
+        assignment,
+        EvaluateError::UndefinedVariable("unknown".into())
+    );
 }
 
 // mod benchmark {
@@ -188,30 +207,34 @@ mod bool {
 mod call {
     use super::*;
 
-    test_std_lox_eval_error!(bool, call, EvaluateError::NotCallable(Value::Bool(true)));
-    test_std_lox_eval_error!(nil, call, EvaluateError::NotCallable(Value::Nil));
-    test_std_lox_eval_error!(num, call, EvaluateError::NotCallable(Value::Number(123.0)));
+    test_std_lox_eval_error!(bool, call, matches => EvaluateError::NotCallable(_));
+    test_std_lox_eval_error!(nil, call, matches => EvaluateError::NotCallable(_));
+    test_std_lox_eval_error!(num, call, matches => EvaluateError::NotCallable(_));
     test_std_lox_eval_error!(
         string,
         call,
         EvaluateError::NotCallable(Value::String("str".into()))
     );
-    // TODO: classes
-    // test_std_lox!(object, call, Value::Nil, "a\n");
+    test_std_lox_eval_error!(object, call, matches => EvaluateError::NotCallable(_));
 }
 
-// TODO: classes
-// mod class {
-//    use super::*;
-//
-// }
+// TODO: inheritance
+mod class {
+    use super::*;
+
+    test_std_lox!(empty, class, Value::Nil, "Foo\n");
+    // test_std_lox!(inherit_self, class, Value::Nil, "a\n");
+    // test_std_lox!(inherited_method, class, Value::Nil, "a\n");
+    // test_std_lox!(local_inherit_other, class, Value::Nil, "a\n");
+    // test_std_lox!(local_inherit_self, class, Value::Nil, "a\n");
+    test_std_lox!(local_reference_self, class, Value::Nil, "Foo\n");
+    test_std_lox!(reference_self, class, Value::Nil, "Foo\n");
+}
 
 mod closure {
     use super::*;
 
-    // TODO: classes
-    // test_std_lox_test!(close_over_method_parameter, closure, Value::Nil, "a\n");
-
+    test_std_lox!(close_over_method_parameter, closure, Value::Nil, "param\n");
     test_std_lox!(unused_later_closure, closure, Value::Nil, "a\n");
     test_std_lox!(unused_closure, closure, Value::Nil, "ok\n");
     test_std_lox!(
@@ -260,11 +283,71 @@ mod comments {
     test_std_lox!(unicode, comments, Value::Nil, "ok\n");
 }
 
-// TODO: classes
-// mod constructor {
-//     use super::*;
+mod constructor {
+    use super::*;
 
-// }
+    test_std_lox!(arguments, constructor, Value::Nil, "init\n1\n2\n");
+    test_std_lox!(
+        call_init_early_return,
+        constructor,
+        Value::Nil,
+        "init\ninit\nFoo instance\n"
+    );
+    test_std_lox!(
+        call_init_explicitly,
+        constructor,
+        Value::Nil,
+        "Foo.init(one)\nFoo.init(two)\nFoo instance\ninit\n"
+    );
+    test_std_lox!(default, constructor, Value::Nil, "Foo instance\n");
+    test_std_lox_eval_error!(
+        default_arguments,
+        constructor,
+        EvaluateError::ArgumentMismatch {
+            expected: 0,
+            got: 2
+        }
+    );
+    test_std_lox!(
+        early_return,
+        constructor,
+        Value::Nil,
+        "init\nFoo instance\n"
+    );
+    test_std_lox_eval_error!(
+        extra_arguments,
+        constructor,
+        EvaluateError::ArgumentMismatch {
+            expected: 2,
+            got: 4
+        }
+    );
+    test_std_lox!(
+        init_not_method,
+        constructor,
+        Value::Nil,
+        "not initializer\n"
+    );
+    test_std_lox_eval_error!(
+        missing_arguments,
+        constructor,
+        EvaluateError::ArgumentMismatch {
+            expected: 2,
+            got: 1
+        }
+    );
+    test_std_lox!(
+        return_in_nested_function,
+        constructor,
+        Value::Nil,
+        "bar\nFoo instance\n"
+    );
+    test_std_lox_parse_error!(
+        return_value,
+        constructor,
+        "Error at 'return': Can't return a value from an initializer."
+    );
+}
 
 mod expressions {
     use super::*;
@@ -274,11 +357,138 @@ mod expressions {
     // test_std_lox!(parse, expressions, Value::Nil, "a\n");
 }
 
-// TODO: classes
-// mod field {
-//    use super::*;
-//
-// }
+mod field {
+    use super::*;
+
+    test_std_lox!(call_function_field, field, Value::Nil, "bar\n1\n2\n");
+    test_std_lox_eval_error!(call_nonfunction_field, field, matches => EvaluateError::NotCallable(_));
+    test_std_lox!(
+        get_and_set_method,
+        field,
+        Value::Nil,
+        "other\n1\nmethod\n2\n"
+    );
+    test_std_lox_eval_error!(
+        get_on_bool,
+        field,
+        EvaluateError::TypeMismatch {
+            expected: "instance".into()
+        }
+    );
+    test_std_lox_eval_error!(
+        get_on_class,
+        field,
+        EvaluateError::TypeMismatch {
+            expected: "instance".into()
+        }
+    );
+    test_std_lox_eval_error!(
+        get_on_function,
+        field,
+        EvaluateError::TypeMismatch {
+            expected: "instance".into()
+        }
+    );
+    test_std_lox_eval_error!(
+        get_on_nil,
+        field,
+        EvaluateError::TypeMismatch {
+            expected: "instance".into()
+        }
+    );
+    test_std_lox_eval_error!(
+        get_on_num,
+        field,
+        EvaluateError::TypeMismatch {
+            expected: "instance".into()
+        }
+    );
+    test_std_lox_eval_error!(
+        get_on_string,
+        field,
+        EvaluateError::TypeMismatch {
+            expected: "instance".into()
+        }
+    );
+    test_std_lox!(
+        many,
+        field,
+        Value::Nil,
+        "apple\napricot\navocado\nbanana\nbilberry\nblackberry\n\
+            blackcurrant\nblueberry\nboysenberry\ncantaloupe\ncherimoya\n\
+            cherry\nclementine\ncloudberry\ncoconut\ncranberry\ncurrant\n\
+            damson\ndate\ndragonfruit\ndurian\nelderberry\nfeijoa\nfig\n\
+            gooseberry\ngrape\ngrapefruit\nguava\nhoneydew\nhuckleberry\n\
+            jabuticaba\njackfruit\njambul\njujube\njuniper\nkiwifruit\n\
+            kumquat\nlemon\nlime\nlongan\nloquat\nlychee\nmandarine\nmango\n\
+            marionberry\nmelon\nmiracle\nmulberry\nnance\nnectarine\nolive\n\
+            orange\npapaya\npassionfruit\npeach\npear\npersimmon\nphysalis\n\
+            pineapple\nplantain\nplum\nplumcot\npomegranate\npomelo\nquince\n\
+            raisin\nrambutan\nraspberry\nredcurrant\nsalak\nsalmonberry\n\
+            satsuma\nstrawberry\ntamarillo\ntamarind\ntangerine\ntomato\n\
+            watermelon\nyuzu\n"
+    );
+    test_std_lox!(method, field, Value::Nil, "got method\narg\n");
+    test_std_lox!(method_binds_this, field, Value::Nil, "foo1\n1\n");
+    test_std_lox!(
+        on_instance,
+        field,
+        Value::Nil,
+        "bar value\nbaz value\nbar value\nbaz value\n"
+    );
+    test_std_lox_eval_error!(
+        set_evaluation_order,
+        field,
+        EvaluateError::UndefinedVariable("undefined1".into())
+    );
+    test_std_lox_eval_error!(
+        set_on_bool,
+        field,
+        EvaluateError::TypeMismatch {
+            expected: "instance".into()
+        }
+    );
+    test_std_lox_eval_error!(
+        set_on_class,
+        field,
+        EvaluateError::TypeMismatch {
+            expected: "instance".into()
+        }
+    );
+    test_std_lox_eval_error!(
+        set_on_function,
+        field,
+        EvaluateError::TypeMismatch {
+            expected: "instance".into()
+        }
+    );
+    test_std_lox_eval_error!(
+        set_on_nil,
+        field,
+        EvaluateError::TypeMismatch {
+            expected: "instance".into()
+        }
+    );
+    test_std_lox_eval_error!(
+        set_on_num,
+        field,
+        EvaluateError::TypeMismatch {
+            expected: "instance".into()
+        }
+    );
+    test_std_lox_eval_error!(
+        set_on_string,
+        field,
+        EvaluateError::TypeMismatch {
+            expected: "instance".into()
+        }
+    );
+    test_std_lox_eval_error!(
+        undefined,
+        field,
+        EvaluateError::UndefinedProperty("bar".into())
+    );
+}
 
 mod r#for {
     use super::*;
@@ -428,7 +638,7 @@ mod r#if {
     );
 }
 
-// TODO: classes & inheritance
+// TODO: inheritance
 // mod inheritance {
 //     use super::*;
 //
@@ -478,11 +688,54 @@ mod logical_operator {
     );
 }
 
-// TODO: classes
-// mod method {
-//    use super::*;
-//
-// }
+mod method {
+    use super::*;
+
+    test_std_lox!(
+        arity,
+        method,
+        Value::Nil,
+        "no args\n1\n3\n6\n10\n15\n21\n28\n36\n"
+    );
+    test_std_lox!(empty_block, method, Value::Nil, "nil\n");
+    test_std_lox_eval_error!(
+        extra_arguments,
+        method,
+        EvaluateError::ArgumentMismatch {
+            expected: 2,
+            got: 4
+        }
+    );
+    test_std_lox_eval_error!(
+        missing_arguments,
+        method,
+        EvaluateError::ArgumentMismatch {
+            expected: 2,
+            got: 1
+        }
+    );
+    test_std_lox_eval_error!(
+        not_found,
+        method,
+        EvaluateError::UndefinedProperty("unknown".into())
+    );
+    test_std_lox!(print_bound_method, method, Value::Nil, "<fn method>\n");
+    test_std_lox_eval_error!(
+        refer_to_name,
+        method,
+        EvaluateError::UndefinedVariable("method".into())
+    );
+    test_std_lox_parse_error!(
+        too_many_arguments,
+        method,
+        "[line 259] Error at '': Can't have more than 255 arguments."
+    );
+    test_std_lox_parse_error!(
+        too_many_parameters,
+        method,
+        "[line 258] Error at '': Can't have more than 255 parameters."
+    );
+}
 
 mod nil {
     use super::*;
@@ -506,10 +759,18 @@ mod number {
         "false\ntrue\nfalse\ntrue\n"
     );
 
-    // TODO: classes
-    // test_std_lox!(decimal_point_at_eof, number, Value::Nil, "a\n");
-    // test_std_lox!(leading_dot, number, Value::Nil, "a\n");
-    // test_std_lox!(trailing_dot, number, Value::Nil, "a\n");
+    test_std_lox_parse_error!(
+        decimal_point_at_eof,
+        number,
+        "[line 2] Error at '': Expect property name after '.'."
+    );
+    // This is supposed to be an error, but I'm fine with leading dots.
+    test_std_lox!(leading_dot, number, Value::Number(0.123), "");
+    test_std_lox_parse_error!(
+        trailing_dot,
+        number,
+        "[line 2] Error at ';': Expect property name after '.'."
+    );
 }
 
 mod operator {
@@ -693,10 +954,17 @@ mod operator {
         }
     );
 
-    // TODO: classes
-    // test_std_lox!(equals_class, operator, Value::Nil, "a\n");
-    // test_std_lox!(equals_method, operator, Value::Nil, "a\n");
-    // test_std_lox!(not_class, operator, Value::Nil, "false\ntrue\ntrue\nfalse\nfalse\ntrue\nfalse\nfalse\n");
+    test_std_lox!(
+        equals_class,
+        operator,
+        Value::Nil,
+        "true\nfalse\nfalse\ntrue\nfalse\nfalse\nfalse\nfalse\n"
+    );
+    // TODO: Closure's for methods need new implementation to pass `this` to the method at
+    // `GetProperty` time
+    // test_std_lox!(equals_method, operator, Value::Nil, "true\nfalse\n");
+
+    test_std_lox!(not_class, operator, Value::Nil, "false\nfalse\n");
 }
 
 mod print {
@@ -714,7 +982,7 @@ mod regression {
 
     test_std_lox!(_40, regression, Value::Nil, "false\n");
 
-    // TODO: classes
+    // TODO: inheritance
     // test_std_lox!(_394, regression, Value::Nil, "a\n");
 }
 
@@ -727,9 +995,7 @@ mod r#return {
     test_std_lox_eval_error!(at_top_level, return, EvaluateError::TopLevelReturn);
     test_std_lox!(in_function, return, Value::Nil, "ok\n");
     test_std_lox!(return_nil_if_no_value, return, Value::Nil, "nil\n");
-
-    // TODO: classes
-    // test_std_lox!(in_method, return, Value::Nil, "a\n");
+    test_std_lox!(in_method, return, Value::Nil, "ok\n");
 }
 
 // I don't want to deal with Tokens right this moment
@@ -767,8 +1033,7 @@ mod string {
 mod variable {
     use super::*;
 
-    // TODO: classes
-    // test_std_lox!(local_from_method, variable, Value::Nil, "variable\n");
+    test_std_lox!(local_from_method, variable, Value::Nil, "variable\n");
 
     test_std_lox_parse_error!(
         collide_with_parameter,
@@ -842,8 +1107,11 @@ mod variable {
 mod r#while {
     use super::*;
 
-    // TODO: classes
-    // test_std_lox_test!(class_in_body, while, Value::Nil, "a\n");
+    test_std_lox_parse_error!(
+        class_in_body,
+        while,
+        "[line 2] Error at 'class': Expect expression."
+    );
     test_std_lox!(closure_in_body, while, Value::Nil, "1\n2\n3\n");
     test_std_lox_parse_error!(
         fun_in_body,

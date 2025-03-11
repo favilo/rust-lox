@@ -21,8 +21,8 @@ macro_rules! test_std_lox {
                 let ast = parse(input).unwrap();
                 let res = ast.evaluate(&env).unwrap();
                 let stdout = env.stdout().unwrap();
-                assert_eq!(res, $expected);
-                assert_eq!(stdout, $stdout);
+                pretty_assertions::assert_eq!(res, $expected);
+                pretty_assertions::assert_eq!(stdout, $stdout);
             }
         }
     };
@@ -37,13 +37,26 @@ macro_rules! test_std_lox_parse_error {
                 let input = crate::test_utils::include_test_file!($folder, $name);
                 let res = parse(input);
                 assert!(res.is_err());
-                assert_eq!(res.unwrap_err().to_string(), $expected);
+                pretty_assertions::assert_eq!(res.unwrap_err().to_string(), $expected);
             }
         }
     };
 }
 
 macro_rules! test_std_lox_eval_error {
+    ($name:ident, $folder:ident, matches => $expected:pat ) => {
+        paste::paste! {
+            #[test_log::test]
+            #[allow(non_snake_case)]
+            fn [< test_ $name >]() {
+                let input = crate::test_utils::include_test_file!($folder, $name);
+                let ast = parse(input).unwrap();
+                let res = ast.run();
+                assert!(res.is_err());
+                assert!(matches!(res.unwrap_err(), $expected));
+            }
+        }
+    };
     ($name:ident, $folder:ident, $expected:expr) => {
         paste::paste! {
             #[test_log::test]
@@ -53,7 +66,7 @@ macro_rules! test_std_lox_eval_error {
                 let ast = parse(input).unwrap();
                 let res = ast.run();
                 assert!(res.is_err());
-                assert_eq!(res.unwrap_err(), $expected);
+                pretty_assertions::assert_eq!(res.unwrap_err(), $expected);
             }
         }
     };
