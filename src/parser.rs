@@ -121,7 +121,7 @@ pub enum Value {
     String(Rc<str>),
     NativeCallable(NativeCallable),
     Callable(Callable),
-    Class(Rc<Class>),
+    Class(Rc<ClassCallable>),
     Instance(Instance),
     Method(Method),
 }
@@ -146,8 +146,12 @@ impl std::fmt::Debug for Value {
             Self::Class(class) => {
                 write!(
                     f,
-                    "<class {name} {methods:#?}>",
+                    "<class {name}{superclass} {methods:#?}>",
                     name = class.name,
+                    superclass = class
+                        .superclass
+                        .as_ref()
+                        .map_or(String::new(), |s| format!(" < {name}", name = s.name)),
                     methods = class.methods
                 )
             }
@@ -279,19 +283,20 @@ pub struct NativeCallable {
 }
 
 #[derive(Debug, Default, Clone)]
-pub struct Class {
+pub struct ClassCallable {
     pub name: Rc<str>,
-    pub methods: Rc<[Value]>,
+    pub superclass: Option<Rc<ClassCallable>>,
+    pub methods: HashMap<Rc<str>, Value>,
     pub context: Context,
 }
 
-impl Class {
+impl ClassCallable {
     pub fn eval_class_call(
         &self,
         param_values: &[Value],
         caller_env: &Context,
     ) -> Result<Value, EvaluateError> {
-        let Class {
+        let ClassCallable {
             name,
             methods,
             ..
@@ -302,12 +307,13 @@ impl Class {
         let fields = Rc::new(RefCell::new(
             methods
                 .iter()
-                .map(|func| {
+                .map(|(name, func)| {
                     log::trace!("Class method: {func:?}");
                     let (name, value) = match func {
                         Value::Callable(callable) => (
                             callable.name.clone(),
                             Value::Callable(Callable {
+                                // Have to update the env anyway.
                                 env: instance_env.clone(),
                                 ..callable.clone()
                             }),
@@ -352,7 +358,7 @@ impl Class {
 
 #[derive(Debug, Default, Clone)]
 pub struct Instance {
-    pub class: Rc<Class>,
+    pub class: Rc<ClassCallable>,
     pub fields: Rc<RefCell<HashMap<Rc<str>, Value>>>,
     pub context: Context,
 }

@@ -218,15 +218,27 @@ mod call {
     test_std_lox_eval_error!(object, call, matches => EvaluateError::NotCallable(_));
 }
 
-// TODO: inheritance
 mod class {
     use super::*;
 
     test_std_lox!(empty, class, Value::Nil, "Foo\n");
-    // test_std_lox!(inherit_self, class, Value::Nil, "a\n");
-    // test_std_lox!(inherited_method, class, Value::Nil, "a\n");
-    // test_std_lox!(local_inherit_other, class, Value::Nil, "a\n");
-    // test_std_lox!(local_inherit_self, class, Value::Nil, "a\n");
+    test_std_lox_parse_error!(
+        inherit_self,
+        class,
+        "[line 1] Error at 'Foo': A class can't inherit from itself."
+    );
+    test_std_lox!(
+        inherited_method,
+        class,
+        Value::Nil,
+        "in foo\nin bar\nin baz\n"
+    );
+    test_std_lox!(local_inherit_other, class, Value::Nil, "B\n");
+    test_std_lox_parse_error!(
+        local_inherit_self,
+        class,
+        "[line 2] Error at 'Foo': A class can't inherit from itself."
+    );
     test_std_lox!(local_reference_self, class, Value::Nil, "Foo\n");
     test_std_lox!(reference_self, class, Value::Nil, "Foo\n");
 }
@@ -638,11 +650,17 @@ mod r#if {
     );
 }
 
-// TODO: inheritance
-// mod inheritance {
-//     use super::*;
-//
-// }
+mod inheritance {
+    use super::*;
+
+    test_std_lox!(constructor, inheritance, Value::Nil, "value\n");
+    test_std_lox!(inherit_from_function, inheritance, Value::Nil, "a\n");
+    test_std_lox!(inherit_from_nil, inheritance, Value::Nil, "a\n");
+    test_std_lox!(inherit_from_number, inheritance, Value::Nil, "a\n");
+    test_std_lox!(inherit_methods, inheritance, Value::Nil, "a\n");
+    test_std_lox!(parenthesized_superclass, inheritance, Value::Nil, "a\n");
+    test_std_lox!(set_fields_from_base_class, inheritance, Value::Nil, "a\n");
+}
 
 // TODO: Deal with limits later
 // mod limit {

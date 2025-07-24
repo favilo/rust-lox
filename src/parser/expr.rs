@@ -297,8 +297,8 @@ impl Expr {
             "primary",
             space_wrap(alt((
                 Expr::parenthesis,
-                Self::variable,
                 Literal::parser.map(Expr::Literal),
+                Self::variable,
                 Self::this,
             ))),
         )
@@ -348,6 +348,7 @@ impl Expr {
 
     fn variable<'s>(input: &mut Input<'s>) -> ModalResult<Expr, Error<Input<'s>>> {
         let name = Self::identifier.parse_next(input)?;
+        log::trace!("Variable: {name} {state:?}", state = input.state);
         if input.state.is_declared(&name) {
             return Err(ErrMode::Cut(Error::from(
                 EvaluateError::CannotAssignToSelf(name),
@@ -791,12 +792,22 @@ impl Evaluate for GetProperty {
         let GetProperty { inst, field } = self;
         let instance = inst.evaluate(env)?;
         match instance {
-            Value::Instance(Instance { fields, .. }) => {
+            Value::Instance(Instance { fields, class, .. }) => {
                 let fields_borrow = fields.borrow();
-                let Some(value) = fields_borrow.get(field).cloned() else {
-                    return Err(EvaluateError::UndefinedProperty(field.to_string()));
-                };
-                Ok(value)
+                let field_value = fields_borrow.get(field).cloned();
+                if let Some(value) = field_value {
+                    return Ok(value);
+                }
+                let mut class = class.clone();
+                loop {
+                    let Some(superclass) = class.superclass.as_ref() else {
+                        return Err(EvaluateError::UndefinedProperty(field.to_string()));
+                    };
+                    class = superclass.clone();
+                    if let Some(method) = class.methods.get(field) {
+                        return Ok(method.clone());
+                    }
+                }
             }
             _ => Err(EvaluateError::TypeMismatch {
                 expected: "instance".into(),

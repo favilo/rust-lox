@@ -50,18 +50,20 @@ pub enum ParseErrorType {
     UnterminatedString,
     TooManyArguments,
     TooManyParameters,
+    NoSelfSuperclass,
 }
 
 impl Display for ParseErrorType {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            ParseErrorType::Expected(s) => write!(f, "Expect {s}."),
-            ParseErrorType::UndefinedVariable(name) => write!(f, "Undefined variable: `{name}`"),
-            ParseErrorType::InvalidOperator => write!(f, "Invalid operator"),
-            ParseErrorType::UnterminatedString => write!(f, "Unterminated string."),
-            ParseErrorType::TooManyArguments => write!(f, "Can't have more than 255 arguments."),
-            ParseErrorType::TooManyParameters => write!(f, "Can't have more than 255 parameters."),
-            ParseErrorType::InvalidAssignment => write!(f, "Invalid assignment target."),
+            Self::Expected(s) => write!(f, "Expect {s}."),
+            Self::UndefinedVariable(name) => write!(f, "Undefined variable: `{name}`"),
+            Self::InvalidOperator => write!(f, "Invalid operator"),
+            Self::UnterminatedString => write!(f, "Unterminated string."),
+            Self::TooManyArguments => write!(f, "Can't have more than 255 arguments."),
+            Self::TooManyParameters => write!(f, "Can't have more than 255 parameters."),
+            Self::InvalidAssignment => write!(f, "Invalid assignment target."),
+            Self::NoSelfSuperclass => write!(f, "A class can't inherit from itself."),
         }
     }
 }
@@ -162,6 +164,7 @@ pub enum EvaluateError {
     ArgumentMismatch { expected: usize, got: usize },
     FunctionBodyNotBlock(String),
     NotCallable(Value),
+    NotClass(Value),
     TopLevelReturn,
     Return(Value),
     StackOverflow,
@@ -170,6 +173,7 @@ pub enum EvaluateError {
     UndefinedProperty(String),
     ThisOutsideClass,
     ReturnFromInitializer,
+    SuperclassNotDefined(String),
 }
 
 impl From<EvaluateError> for Error<Input<'_>> {
@@ -195,6 +199,7 @@ impl Display for EvaluateError {
                 write!(f, "Function body must be a block: '{name}'.")
             }
             Self::NotCallable(v) => write!(f, "Expected callable, found {v:?}."),
+            Self::NotClass(v) => write!(f, "Expected class, found {v:?}."),
             Self::Return(v) => write!(f, "Returned value: {v}."),
             Self::CannotAssignToSelf(name) => write!(
                 f,
@@ -212,6 +217,7 @@ impl Display for EvaluateError {
                 f,
                 "Error at 'return': Can't return a value from an initializer."
             ),
+            Self::SuperclassNotDefined(name) => write!(f, "Undefined superclass: '{name}'"),
         }
     }
 }

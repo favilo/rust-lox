@@ -1,4 +1,4 @@
-use std::{iter::once, rc::Rc};
+use std::{collections::HashMap, iter::once, rc::Rc};
 
 use winnow::{
     ModalResult, Parser,
@@ -10,7 +10,7 @@ use winnow::{
 use crate::{
     error::{Error, EvaluateError, ParseError, ParseErrorType},
     interpreter::Context,
-    parser::{Callable, Class, full_word, or_parse_error, space_wrap},
+    parser::{Callable, ClassCallable, full_word, or_parse_error, space_wrap},
 };
 
 use super::{
@@ -49,10 +49,7 @@ pub enum Statement {
     For(For),
     Function(Function),
     Return(Expr),
-    Class {
-        name: Rc<str>,
-        methods: Rc<[Statement]>,
-    },
+    Class(Class),
 }
 
 impl std::fmt::Display for Statement {
@@ -83,13 +80,7 @@ impl std::fmt::Display for Statement {
                 write!(f, "{func}")
             }
             Statement::Return(expr) => write!(f, "return {expr};"),
-            Statement::Class { name, methods } => {
-                writeln!(f, "class {name} {{")?;
-                for method in methods.iter() {
-                    writeln!(f, "{method:?}")?;
-                }
-                write!(f, "}}")
-            }
+            Statement::Class(class) => write!(f, "{class}"),
         }
     }
 }
@@ -181,7 +172,7 @@ impl Evaluate for Statement {
                 Err(EvaluateError::Return(expr.evaluate(env)?))
             }
             Statement::Function(func) => Self::eval_func(env, func),
-            Statement::Class { name, methods } => Self::eval_class(env, name, methods),
+            Statement::Class(class) => Self::eval_class(env, class),
         }
     }
 }
@@ -235,14 +226,15 @@ impl Statement {
         Ok(value)
     }
 
-    fn eval_class(
-        env: &Context,
-        name: &Rc<str>,
-        methods: &Rc<[Statement]>,
-    ) -> Result<Value, EvaluateError> {
-        log::trace!("class: {name} {{ {methods:?} }}");
+    fn eval_class(env: &Context, class: &Class) -> Result<Value, EvaluateError> {
+        log::trace!(
+            "class: {name} {{ {methods:?} }}",
+            name = class.name,
+            methods = class.methods
+        );
         let class_env = env.child();
-        let methods = methods
+        let methods = class
+            .methods
             .iter()
             .map(|method| {
                 if let Statement::Function(Function {
@@ -259,20 +251,38 @@ impl Statement {
                         env: class_env.clone(),
                         initializer: name.as_ref() == "init",
                     });
-                    Ok(value)
+                    Ok((name.clone(), value))
                 } else {
-                    Err(EvaluateError::ClassMethodNotFunction(name.to_string()))
+                    Err(EvaluateError::ClassMethodNotFunction(
+                        class.name.to_string(),
+                    ))
                 }
             })
-            .collect::<Result<Vec<_>, _>>()?;
-        let value = Value::Class(Rc::new(Class {
-            name: name.clone(),
-            methods: methods.into(),
+            .collect::<Result<HashMap<Rc<str>, Value>, _>>()?;
+        let superclass = class.superclass.as_ref().map(|superclass| {
+            let superclass = env.get(&superclass.name, superclass.depth)?;
+            if let Value::Class(ref class) = superclass {
+                Ok(class.clone())
+            } else {
+                Err(EvaluateError::NotClass(superclass))
+            }
+        });
+        if let Some(Err(e)) = superclass {
+            return Err(e);
+        }
+
+        let value = Value::Class(Rc::new(ClassCallable {
+            name: class.name.clone(),
+            methods,
+            superclass: superclass.and_then(Result::ok),
             context: env.clone(),
         }));
         let depth = env.depth();
-        log::debug!("define: {name} = {value:#?} with depth {depth:?}");
-        env.declare(name, value.clone(), depth)?;
+        log::debug!(
+            "define: {name} = {value:#?} with depth {depth:?}",
+            name = class.name,
+        );
+        env.declare(&class.name, value.clone(), depth)?;
         log::debug!("class definition global env: {env:?}");
 
         Ok(value)
@@ -324,6 +334,34 @@ impl Statement {
                 .declare(&name)
                 .map_err(|e| ErrMode::Cut(Error::from(e)))?;
 
+            let superclass = opt(preceded(
+                space_wrap("<"),
+                or_parse_error(
+                    Expr::identifier,
+                    ParseErrorType::Expected("superclass name"),
+                ),
+            ))
+            .parse_next(input)?;
+            let superclass = if let Some(superclass) = superclass {
+                if superclass == name {
+                    return Err(ErrMode::Cut(Error::from(ParseError::new(
+                        ParseErrorType::NoSelfSuperclass,
+                        &superclass,
+                        input,
+                    ))));
+                } else if !input.state.is_defined(&superclass) {
+                    return Err(ErrMode::Cut(Error::from(
+                        EvaluateError::SuperclassNotDefined(superclass),
+                    )));
+                }
+                let depth = input.state.depth(&superclass);
+                Some(Superclass {
+                    name: superclass.into(),
+                    depth,
+                })
+            } else {
+                None
+            };
             input
                 .state
                 .define(&name)
@@ -372,10 +410,11 @@ impl Statement {
             }
             or_parse_error(space_wrap("}"), ParseErrorType::Expected("'}'")).parse_next(input)?;
             input.state.end_scope();
-            Ok(Statement::Class {
+            Ok(Statement::Class(Class {
                 name: name.into(),
+                superclass,
                 methods: methods.into(),
-            })
+            }))
         })
         .parse_next(input)
     }
@@ -686,6 +725,39 @@ impl std::fmt::Display for Function {
             params = self.param_names.join(", "),
             body = self.body
         )
+    }
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct Class {
+    name: Rc<str>,
+    superclass: Option<Superclass>,
+    methods: Rc<[Statement]>,
+}
+
+impl std::fmt::Display for Class {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "class {name} ", name = self.name)?;
+        if let Some(superclass) = self.superclass.as_ref() {
+            write!(f, "< {superclass} ")?;
+        }
+        writeln!(f, "{{")?;
+        for method in self.methods.iter() {
+            writeln!(f, "{method:?}")?;
+        }
+        write!(f, "}}")
+    }
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct Superclass {
+    name: Rc<str>,
+    depth: Option<usize>,
+}
+
+impl std::fmt::Display for Superclass {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{name}", name = self.name)
     }
 }
 

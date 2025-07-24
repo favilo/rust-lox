@@ -4,13 +4,13 @@ use std::{
 };
 
 use winnow::{
+    Parser,
     combinator::trace,
     error::{ErrMode, Needed},
     stream::{
         AsBStr, AsBytes, Compare, CompareResult, FindSlice, Location, Offset, SliceLen, Stream,
         StreamIsPartial, UpdateSlice,
     },
-    Parser,
 };
 
 use crate::error::{Error, EvaluateError};
@@ -127,14 +127,16 @@ impl State {
         self.scopes
             .iter()
             .rev()
-            .any(|scope| scope.get(name) == Some(&VarState::Defined))
+            .find(|scope| scope.contains_key(name))
+            .is_none_or(|scope| scope.get(name) == Some(&VarState::Defined))
     }
 
     pub fn is_declared(&self, name: &str) -> bool {
         self.scopes
             .iter()
             .rev()
-            .any(|scope| scope.get(name) == Some(&VarState::Declared))
+            .find(|scope| scope.contains_key(name))
+            .is_some_and(|scope| scope.get(name) == Some(&VarState::Declared))
     }
 
     pub fn depth(&mut self, name: &str) -> Option<usize> {
